@@ -6,6 +6,8 @@ import { defaultLimiter } from './middleware/rateLimit.js'
 import connectionsRouter from './routes/connections.js'
 import alertsRouter from './routes/alerts.js'
 import activityRouter from './routes/activity.js'
+import scriptsRouter from './routes/scripts.js'
+import sandboxRouter from './routes/sandbox.js'
 import { startHealthScanScheduler, createHealthScanWorker } from './workers/healthScanWorker.js'
 
 const app = express()
@@ -30,7 +32,8 @@ app.get('/health', (_req, res) => {
 app.use('/api/connections', connectionsRouter)
 app.use('/api/alerts',      alertsRouter)
 app.use('/api/activity',    activityRouter)
-// Phase 3+: scripts, sandbox, agents, analytics
+app.use('/api/scripts',     scriptsRouter)
+app.use('/api/sandbox',     sandboxRouter)
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {

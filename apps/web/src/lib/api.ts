@@ -39,4 +39,20 @@ export const api = {
   activity: {
     list: (limit = 20) => apiFetch<{ data: unknown[] }>(`/api/activity?limit=${limit}`),
   },
+  scripts: {
+    list: (params?: Record<string, string>) => {
+      const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+      return apiFetch<{ data: unknown[] }>(`/api/scripts${qs}`)
+    },
+    get: (id: string) => apiFetch<{ data: unknown }>(`/api/scripts/${id}`),
+  },
+  sandbox: {
+    envs: () => apiFetch<{ data: unknown[] }>('/api/sandbox/envs'),
+    runs: () => apiFetch<{ data: unknown[] }>('/api/sandbox/runs'),
+    run:  (scriptId: string, connectionId: string) =>
+      apiFetch<{ data: unknown; message: string }>('/api/sandbox/run', {
+        method: 'POST',
+        body: JSON.stringify({ script_id: scriptId, connection_id: connectionId }),
+      }),
+  },
 }

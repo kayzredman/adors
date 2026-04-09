@@ -1,5 +1,6 @@
 import type { DbConnection, HealthSnapshot, HealthStatus } from '@adors/shared'
 import { supabase } from '../config/supabase.js'
+import { getAdapter, resolveCredentials } from '../adapters/index.js'
 
 // ─── Mock Adapter Interface ───────────────────────────────────────────────────
 // Phase 2 will replace these with real oracledb / mssql / mysql2 drivers
@@ -248,7 +249,7 @@ function mockMariaDbHealth(conn: DbConnection): HealthMetrics {
 
 // ─── Adapter Router ───────────────────────────────────────────────────────────
 
-function getMetrics(conn: DbConnection): HealthMetrics {
+function getMockMetrics(conn: DbConnection): HealthMetrics {
   switch (conn.db_type) {
     case 'oracle':  return mockOracleHealth(conn)
     case 'mssql':   return mockMssqlHealth(conn)
@@ -256,10 +257,77 @@ function getMetrics(conn: DbConnection): HealthMetrics {
   }
 }
 
+/**
+ * Route to live adapter if credentials_ref is set, otherwise mock.
+ * Live adapter returns raw driver metrics; we wrap them in the HealthMetrics
+ * shape so the rest of the pipeline (alerts, snapshots) works unchanged.
+ */
+async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
+  if (!conn.credentials_ref) {
+    return getMockMetrics(conn)
+  }
+
+  try {
+    const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
+    const creds = resolveCredentials(conn.credentials_ref, {
+      host:     conn.host,
+      port:     conn.port ?? defaultPorts[conn.db_type] ?? 3306,
+      database: conn.service_name ?? conn.database_name ?? conn.name,
+    })
+
+    const adapter  = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
+    const details  = await adapter.getHealthMetrics(creds)
+
+    // Derive score + status from the live details
+    const score  = deriveScore(conn.db_type as string, details)
+    const status: HealthStatus = score >= 80 ? 'healthy' : score >= 60 ? 'warning' : 'critical'
+
+    return {
+      score,
+      status,
+      blocked_sessions: Number((details as any).sessions?.blocked ?? (details as any).blocking_spids ?? 0),
+      active_alerts: 0,
+      details: { ...details, adapter: 'live' },
+    }
+  } catch (err: any) {
+    // If live adapter fails (e.g., driver not installed, network issue), fall back + log
+    console.warn(`[healthScanner] Live adapter failed for ${conn.name}: ${err.message}. Falling back to mock.`)
+    return getMockMetrics(conn)
+  }
+}
+
+function deriveScore(dbType: string, details: Record<string, unknown>): number {
+  // Simple heuristic scoring from live metrics
+  let score = 100
+  if (dbType === 'oracle') {
+    const dataPct = (details as any).storage?.data?.used_pct ?? 0
+    if (dataPct >= 90) score -= 30
+    else if (dataPct >= 80) score -= 15
+    const blocked = (details as any).sessions?.blocked ?? 0
+    if (blocked > 0) score -= Math.min(20, blocked * 5)
+  }
+  if (dbType === 'mssql') {
+    const memPct = (details as any).memory?.buffer_pool_pct ?? 0
+    if (memPct >= 90) score -= 25
+    else if (memPct >= 80) score -= 10
+    const blocking = (details as any).blocking_spids ?? 0
+    if (blocking > 0) score -= Math.min(20, blocking * 5)
+  }
+  if (dbType === 'mariadb') {
+    const hitRatio = (details as any).innodb_buffer_pool?.hit_ratio ?? 100
+    if (hitRatio < 85) score -= 20
+    else if (hitRatio < 92) score -= 10
+    const lag = (details as any).replication?.lag_sec ?? 0
+    if (lag > 30) score -= 20
+    else if (lag > 5) score -= 10
+  }
+  return Math.max(0, Math.min(100, score))
+}
+
 // ─── Core Scanner ────────────────────────────────────────────────────────────
 
 export async function scanConnection(conn: DbConnection): Promise<HealthSnapshot> {
-  const metrics = getMetrics(conn)
+  const metrics = await getMetrics(conn)
 
   const snapshot = {
     connection_id:    conn.id,

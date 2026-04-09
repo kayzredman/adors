@@ -12,6 +12,9 @@ export interface DbConnection {
   host: string
   port: number
   database?: string
+  service_name?: string      // Oracle: service name or SID
+  database_name?: string     // MSSQL / MariaDB default database
+  credentials_ref?: string   // "ENV:PREFIX" → live adapter; omit for mock
   status: ConnectionStatus
   agent_name: string
   prod_pair_id?: string
