@@ -1,0 +1,134 @@
+'use client'
+
+import { MetricChart, Sparkline, StorageCylinder } from '@/components/ui/Charts'
+
+interface MariaDbDetailPanelProps {
+  metrics: Record<string, any>
+  name: string
+}
+
+export function MariaDbDetailPanel({ metrics: m, name }: MariaDbDetailPanelProps) {
+  return (
+    <div className="space-y-4">
+      {/* Server info + Connections */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border bg-card p-4 text-sm space-y-1">
+          <p className="font-bold text-base text-foreground">{name}</p>
+          <p className="text-muted-foreground">Version: <span className="text-foreground font-mono">{m.db_version}</span></p>
+          <p className="text-muted-foreground">Uptime: <span className="text-foreground">{m.uptime_days} days</span></p>
+          <p className="text-muted-foreground">O/S: <span className="text-foreground font-mono">{m.os}</span></p>
+          <p className="text-muted-foreground">CPUs: <span className="text-foreground">{m.cpus}</span></p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Connections</p>
+          <MetricChart data={m.connection_chart ?? []} color="#0072CE" height={80} label="Connections" />
+          <div className="flex justify-between text-sm mt-1">
+            <span className="text-muted-foreground">Active / Max</span>
+            <span className="font-mono font-semibold text-foreground">{m.active_connections} / {m.max_connections}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Threads Running</span>
+            <span className="font-mono font-semibold text-foreground">{m.threads_running}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* InnoDB Buffer Pool */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">InnoDB Buffer Pool</p>
+          <MetricChart
+            data={m.buffer_hit_chart ?? []}
+            color="#10B981"
+            height={100}
+            label="Hit Ratio %"
+            format={(v) => `${v}%`}
+          />
+          <div className="grid grid-cols-2 gap-x-4 text-sm mt-1">
+            {[
+              ['Buffer Pool Size',  `${m.innodb_buffer_pool_size_gb} GB`],
+              ['Hit Ratio',        `${m.innodb_buffer_hit_ratio_pct}%`],
+              ['Rows Read/s',       m.innodb_rows_read_per_sec?.toLocaleString()],
+              ['Rows Written/s',    m.innodb_rows_written_per_sec?.toLocaleString()],
+            ].map(([label, val]) => (
+              <div key={String(label)} className="flex justify-between border-b border-border/40 pb-1">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="font-mono font-semibold text-foreground">{val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Query throughput */}
+        <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Query Throughput</p>
+          <MetricChart data={m.query_chart ?? []} color="#0072CE" height={100} label="Queries/s" />
+          <div className="grid grid-cols-2 gap-x-4 text-sm mt-1">
+            {[
+              ['Total/s',   m.queries_per_sec?.toLocaleString()],
+              ['SELECT/s',  m.select_per_sec?.toLocaleString()],
+              ['INSERT/s',  m.insert_per_sec?.toLocaleString()],
+              ['UPDATE/s',  m.update_per_sec?.toLocaleString()],
+            ].map(([label, val]) => (
+              <div key={String(label)} className="flex justify-between border-b border-border/40 pb-1">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="font-mono font-semibold text-foreground">{val}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Slow Queries + Replication + Storage */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Slow Queries</p>
+          <MetricChart data={m.slow_query_chart ?? []} color="#F59E0B" height={90} label="Slow/min" />
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Slow/min</span>
+            <span className={`font-bold tabular-nums ${(m.slow_queries_per_min ?? 0) > 3 ? 'text-warning' : 'text-success'}`}>
+              {m.slow_queries_per_min}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Long Query Time</span>
+            <span className="font-mono text-foreground">{m.long_query_time_sec}s</span>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Replication</p>
+          <MetricChart data={m.replication_lag_chart ?? []} color="#8B5CF6" height={90} label="Lag (s)" />
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Status</span>
+            <span className={`font-bold ${m.replication_running ? 'text-success' : 'text-muted-foreground'}`}>
+              {m.replication_running ? 'Running' : 'N/A'}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Lag</span>
+            <span className={`font-bold tabular-nums ${(m.replication_lag_sec ?? 0) > 5 ? 'text-critical' : 'text-success'}`}>
+              {m.replication_lag_sec}s
+            </span>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Storage</p>
+          <StorageCylinder
+            label="Disk"
+            usedPct={m.disk_usage_pct ?? 0}
+            sizeLabel={`${m.disk_used_gb} / ${m.disk_total_gb} GB`}
+          />
+          <MetricChart data={m.disk_io_chart ?? []} color="#EF4444" height={70} label="I/O ops/s" />
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Table Lock Waits</span>
+            <span className={`font-bold tabular-nums ${(m.table_lock_waited ?? 0) > 0 ? 'text-warning' : 'text-success'}`}>
+              {m.table_lock_waited}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
