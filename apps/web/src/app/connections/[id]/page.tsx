@@ -14,7 +14,8 @@ export default function ConnectionDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router  = useRouter()
 
-  const [data,     setData]     = useState<any>(null)
+  const [conn,     setConn]     = useState<any>(null)
+  const [snapshot, setSnapshot] = useState<any>(null)
   const [loading,  setLoading]  = useState(true)
   const [scanning, setScanning] = useState(false)
   const [error,    setError]    = useState<string | null>(null)
@@ -22,11 +23,11 @@ export default function ConnectionDetailPage() {
   async function load() {
     try {
       setLoading(true)
-      const [connRes, snapRes] = await Promise.all([
-        api.connections.get(id),
-        api.snapshots.latest(id).catch(() => null),
-      ])
-      setData({ connection: (connRes as any).data, snapshot: (snapRes as any)?.data ?? null })
+      setError(null)
+      // Single API call — backend returns conn + snapshot together (Redis-cached)
+      const res = await api.connections.get(id) as any
+      setConn(res.data)
+      setSnapshot(res.data.snapshot ?? null)
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -38,6 +39,7 @@ export default function ConnectionDetailPage() {
     setScanning(true)
     try {
       await api.connections.scan(id)
+      // After scan, reload — Redis cache was busted server-side so we get fresh data
       await load()
     } finally {
       setScanning(false)
@@ -52,11 +54,10 @@ export default function ConnectionDetailPage() {
     </div>
   )
 
-  if (error || !data) return (
+  if (error || !conn) return (
     <div className="p-8 text-critical">Error: {error ?? 'Connection not found'}</div>
   )
 
-  const { connection: conn, snapshot } = data
   const metrics = snapshot?.metrics ?? {}
   const score   = snapshot?.score   ?? 0
   const status  = snapshot?.status  ?? 'unknown'

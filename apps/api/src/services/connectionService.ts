@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js'
+import { redis } from '../config/redis.js'
 import type { DbConnection } from '@adors/shared'
 
 export async function getAllConnections(): Promise<DbConnection[]> {
@@ -84,6 +85,12 @@ export async function deleteConnection(id: string): Promise<void> {
 }
 
 export async function getLatestHealthSnapshot(connectionId: string) {
+  const cacheKey = `snap:latest:${connectionId}`
+
+  // Serve from Redis cache if still warm (30s TTL)
+  const cached = await redis.get(cacheKey).catch(() => null)
+  if (cached) return JSON.parse(cached)
+
   const { data, error } = await supabase
     .from('health_snapshots')
     .select('*')
@@ -93,7 +100,14 @@ export async function getLatestHealthSnapshot(connectionId: string) {
     .single()
 
   if (error) return null
+
+  // Cache for 30 seconds — background scan interval is typically 60-300 s
+  redis.setex(cacheKey, 30, JSON.stringify(data)).catch(() => {})
   return data
+}
+
+export async function bustSnapshotCache(connectionId: string) {
+  await redis.del(`snap:latest:${connectionId}`).catch(() => {})
 }
 
 export async function getConnectionsWithHealth() {

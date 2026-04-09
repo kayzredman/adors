@@ -68,7 +68,21 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       .single()
 
     if (error || !profile) {
-      res.status(403).json({ error: 'User profile not found' })
+      // Auto-create: any valid Supabase-authenticated user gets a default
+      // analyst profile so a missing row never blocks legitimate users.
+      const { data: newProfile, error: upsertErr } = await supabase
+        .from('user_profiles')
+        .upsert({ id: userId, role: 'analyst' }, { onConflict: 'id' })
+        .select('role')
+        .single()
+      if (upsertErr || !newProfile) {
+        res.status(403).json({ error: 'User profile not found' })
+        return
+      }
+      const role = newProfile.role as UserRole
+      roleCache.set(userId, { role, expiresAt: Date.now() + CACHE_TTL_MS })
+      req.user = { id: userId, email, role }
+      next()
       return
     }
 

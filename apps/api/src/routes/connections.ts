@@ -9,6 +9,7 @@ import {
   deleteConnection,
   getConnectionsWithHealth,
   getLatestHealthSnapshot,
+  bustSnapshotCache,
 } from '../services/connectionService.js'
 import { triggerManualScan } from '../services/healthScanner.js'
 import { logActivity } from '../services/activityService.js'
@@ -61,14 +62,19 @@ router.get('/', requireAuth, async (req, res) => {
 })
 
 // ─── GET /api/connections/:id ────────────────────────────────────────────────
+// Returns connection + latest snapshot in a single round-trip so the detail
+// page only needs one fetch (auth check happens once, Redis serves the snap).
 router.get('/:id', requireAuth, async (req, res) => {
   try {
-    const conn = await getConnectionById(req.params.id)
+    const [conn, snapshot] = await Promise.all([
+      getConnectionById(req.params.id),
+      getLatestHealthSnapshot(req.params.id),
+    ])
     if (!conn) {
       res.status(404).json({ error: 'Connection not found' })
       return
     }
-    res.json({ data: conn })
+    res.json({ data: { ...conn, snapshot: snapshot ?? null } })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }
@@ -119,6 +125,7 @@ router.post('/:id/scan', requireAuth, requireDBA, async (req, res) => {
     }
 
     const snapshot = await triggerManualScan(conn)
+    await bustSnapshotCache(conn.id)   // fresh data — invalidate Redis
     await logActivity({
       actorId:    req.user!.id,
       actorName:  req.user!.email,
