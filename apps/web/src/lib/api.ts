@@ -37,6 +37,16 @@ export const api = {
       apiFetch<{ data: unknown }>(`/api/connections/${id}/scan`, { method: 'POST' }),
     delete: (id: string) =>
       apiFetch<{ message: string }>(`/api/connections/${id}`, { method: 'DELETE' }),
+    test:   (body: Record<string, unknown>) =>
+      apiFetch<{ data: { ok: boolean; latency_ms: number } }>('/api/connections/test', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    create: (body: Record<string, unknown>) =>
+      apiFetch<{ data: unknown }>('/api/connections', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   },
   alerts: {
     list:        (params?: Record<string, string>) => {

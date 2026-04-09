@@ -5,8 +5,7 @@ import Link from 'next/link'
 import { Plus, Database, RefreshCw, X, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
 import { cn, dbTypeLabel, healthStatusColor } from '@/lib/utils'
 import { HealthGauge } from '@/components/ui/HealthGauge'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
+import { api } from '@/lib/api'
 
 type Connection = {
   id: string
@@ -36,8 +35,10 @@ export default function ConnectionsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch(`${API_URL}/api/connections?health=true`)
-      if (res.ok) setConnections((await res.json()).data ?? [])
+      const result = await api.connections.list(true)
+      setConnections((result.data as Connection[]) ?? [])
+    } catch {
+      // silently ignore — keeps empty state
     } finally {
       setLoading(false)
     }
@@ -48,7 +49,7 @@ export default function ConnectionsPage() {
   async function scan(id: string) {
     setScanning(id)
     try {
-      await fetch(`${API_URL}/api/connections/${id}/scan`, { method: 'POST' })
+      await api.connections.scan(id)
       await load()
     } finally {
       setScanning(null)
@@ -238,13 +239,8 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await fetch(`${API_URL}/api/connections/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      })
-      const data = await res.json()
-      setTestResult(data.data ?? { ok: false, latency_ms: 0 })
+      const result = await api.connections.test(form as unknown as Record<string, unknown>)
+      setTestResult(result.data ?? { ok: false, latency_ms: 0 })
     } catch {
       setTestResult({ ok: false, latency_ms: 0 })
     } finally {
@@ -261,28 +257,19 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
     setSaving(true)
     setError('')
     try {
-      const res = await fetch(`${API_URL}/api/connections`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name:            form.name,
-          db_type:         form.db_type,
-          environment:     form.environment,
-          host:            form.host,
-          port:            Number(form.port),
-          database_name:   form.database_name || undefined,
-          agent_name:      form.agent_name,
-          credentials_ref: form.credentials_ref || undefined,
-        }),
+      await api.connections.create({
+        name:            form.name,
+        db_type:         form.db_type,
+        environment:     form.environment,
+        host:            form.host,
+        port:            Number(form.port),
+        database_name:   form.database_name || undefined,
+        agent_name:      form.agent_name,
+        credentials_ref: form.credentials_ref || undefined,
       })
-      if (!res.ok) {
-        const data = await res.json()
-        setError(data.error?.fieldErrors ? Object.values(data.error.fieldErrors).flat().join(' · ') : (data.error ?? 'Save failed'))
-        return
-      }
       onSaved()
-    } catch {
-      setError('Network error — is the API running?')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
     } finally {
       setSaving(false)
     }

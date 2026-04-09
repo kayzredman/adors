@@ -1,7 +1,9 @@
+'use client'
+
+import { useState, useEffect } from 'react'
 import { BookOpen, Shield, ShieldAlert, ShieldCheck, ShieldX } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
+import { api } from '@/lib/api'
 
 type Script = {
   id: string
@@ -13,14 +15,6 @@ type Script = {
   sql_content?: string
   verified_at: string | null
   created_at: string
-}
-
-async function getScripts(): Promise<Script[]> {
-  try {
-    const res = await fetch(`${API_URL}/api/scripts`, { next: { revalidate: 60 } })
-    if (!res.ok) return []
-    return (await res.json()).data ?? []
-  } catch { return [] }
 }
 
 const RISK_CONFIG = {
@@ -36,8 +30,16 @@ const DB_COLORS = {
   mariadb: 'text-[#003545] bg-[#003545]/10 border-[#003545]/20 dark:text-blue-300 dark:bg-blue-900/20 dark:border-blue-700/30',
 }
 
-export default async function ScriptsPage() {
-  const scripts = await getScripts()
+export default function ScriptsPage() {
+  const [scripts, setScripts] = useState<Script[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    api.scripts.list()
+      .then(r => setScripts((r.data as Script[]) ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
 
   const byType = {
     oracle:  scripts.filter(s => s.db_type === 'oracle'),
@@ -58,25 +60,39 @@ export default async function ScriptsPage() {
           </p>
         </div>
         <div className="flex gap-3 text-sm text-muted-foreground">
-          <span><strong className="text-foreground">{scripts.length}</strong> scripts</span>
-          <span><strong className="text-success">{scripts.filter(s => s.verified_at).length}</strong> verified</span>
+          {loading ? (
+            <span className="text-muted-foreground text-xs animate-pulse">Loading…</span>
+          ) : (
+            <>
+              <span><strong className="text-foreground">{scripts.length}</strong> scripts</span>
+              <span><strong className="text-success">{scripts.filter(s => s.verified_at).length}</strong> verified</span>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Grid by DB type */}
-      {(Object.entries(byType) as [keyof typeof byType, Script[]][]).map(([type, list]) => (
-        <section key={type}>
-          <div className="flex items-center gap-2 mb-3">
-            <span className={cn('text-xs font-bold px-2 py-0.5 rounded border font-mono', DB_COLORS[type])}>
-              {type.toUpperCase()}
-            </span>
-            <span className="text-xs text-muted-foreground">{list.length} scripts</span>
-          </div>
-          <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
-            {list.map(script => <ScriptCard key={script.id} script={script} />)}
-          </div>
-        </section>
-      ))}
+      {loading ? (
+        <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-48 rounded-xl border border-border bg-card animate-pulse" />
+          ))}
+        </div>
+      ) : (
+        /* Grid by DB type */
+        (Object.entries(byType) as [keyof typeof byType, Script[]][]).map(([type, list]) => (
+          <section key={type}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className={cn('text-xs font-bold px-2 py-0.5 rounded border font-mono', DB_COLORS[type])}>
+                {type.toUpperCase()}
+              </span>
+              <span className="text-xs text-muted-foreground">{list.length} scripts</span>
+            </div>
+            <div className="grid grid-cols-2 xl:grid-cols-3 gap-4">
+              {list.map(script => <ScriptCard key={script.id} script={script} />)}
+            </div>
+          </section>
+        ))
+      )}
     </div>
   )
 }

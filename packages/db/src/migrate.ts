@@ -1,5 +1,5 @@
 import { Client } from 'pg'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { join } from 'path'
 
 const DATABASE_URL =
@@ -12,18 +12,40 @@ async function migrate(maxRetries = 20, retryDelay = 3000): Promise<void> {
     try {
       await client.connect()
 
-      // GoTrue (supabase-auth) must have initialized the auth schema before
-      // we can create user_profiles (which references auth.users).
-      // Retry until it's ready.
+      // GoTrue must have initialized auth schema before migration 001 can run
       await client.query('SELECT 1 FROM auth.users LIMIT 1')
 
-      const sql = readFileSync(
-        join(__dirname, '../migrations/001_initial_schema.sql'),
-        'utf-8',
-      )
-      await client.query(sql)
+      // Ensure tracking table exists
+      await client.query(`
+        create table if not exists public._migrations (
+          filename   text primary key,
+          applied_at timestamptz not null default now()
+        )
+      `)
+
+      const migrationsDir = join(__dirname, '../migrations')
+      const files = readdirSync(migrationsDir)
+        .filter(f => f.endsWith('.sql'))
+        .sort()
+
+      for (const file of files) {
+        const { rows } = await client.query(
+          'SELECT 1 FROM public._migrations WHERE filename = $1', [file]
+        )
+        if (rows.length > 0) {
+          console.log(`⏭  ${file} (already applied)`)
+          continue
+        }
+        const sql = readFileSync(join(migrationsDir, file), 'utf-8')
+        await client.query(sql)
+        await client.query(
+          'INSERT INTO public._migrations (filename) VALUES ($1)', [file]
+        )
+        console.log(`✓ ${file}`)
+      }
+
       await client.end()
-      console.log('✓ Migration complete')
+      console.log('✓ All migrations complete')
       return
     } catch (err: any) {
       await client.end().catch(() => {})
@@ -34,7 +56,7 @@ async function migrate(maxRetries = 20, retryDelay = 3000): Promise<void> {
 
       if (attempt < maxRetries && isRetryable) {
         console.log(
-          `[${attempt}/${maxRetries}] Waiting for database to be ready... (${err.message})`,
+          `[${attempt}/${maxRetries}] Waiting for database... (${err.message})`,
         )
         await new Promise((r) => setTimeout(r, retryDelay))
       } else {
