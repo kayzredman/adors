@@ -4,9 +4,12 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import type { Session, User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/browser'
 
+type UserRole = 'viewer' | 'analyst' | 'dba' | 'super_admin'
+
 interface AuthContextValue {
   session:  Session | null
   user:     User | null
+  role:     UserRole | null
   /** Returns the current access token, refreshing if needed */
   getToken: () => Promise<string | null>
   loading:  boolean
@@ -15,6 +18,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   session:  null,
   user:     null,
+  role:     null,
   getToken: async () => null,
   loading:  true,
 })
@@ -22,6 +26,7 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient()
   const [session, setSession] = useState<Session | null>(null)
+  const [role,    setRole]    = useState<UserRole | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -39,6 +44,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => subscription.unsubscribe()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch role from /api/me once session is available
+  useEffect(() => {
+    if (!session) { setRole(null); return }
+    const token = session.access_token
+    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.data?.role) setRole(d.data.role as UserRole) })
+      .catch(() => {})
+  }, [session])
+
   const getToken = useCallback(async (): Promise<string | null> => {
     const { data } = await supabase.auth.getSession()
     return data.session?.access_token ?? null
@@ -46,7 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ session, user: session?.user ?? null, getToken, loading }}
+      value={{ session, user: session?.user ?? null, role, getToken, loading }}
     >
       {children}
     </AuthContext.Provider>

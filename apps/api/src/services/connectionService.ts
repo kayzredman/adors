@@ -55,6 +55,29 @@ export async function updateConnectionStatus(
   if (error) throw new Error(error.message)
 }
 
+export async function updateConnection(
+  id: string,
+  payload: Partial<{
+    name:            string
+    environment:     DbConnection['environment']
+    host:            string
+    port:            number
+    database_name:   string
+    agent_name:      string
+    credentials_ref: string
+  }>,
+): Promise<DbConnection> {
+  const { data, error } = await supabase
+    .from('connections')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) throw new Error(error.message)
+  return data as DbConnection
+}
+
 export async function deleteConnection(id: string): Promise<void> {
   const { error } = await supabase.from('connections').delete().eq('id', id)
   if (error) throw new Error(error.message)

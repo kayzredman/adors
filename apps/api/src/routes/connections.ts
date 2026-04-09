@@ -5,6 +5,7 @@ import {
   getAllConnections,
   getConnectionById,
   createConnection,
+  updateConnection,
   deleteConnection,
   getConnectionsWithHealth,
   getLatestHealthSnapshot,
@@ -142,6 +143,44 @@ router.get('/:id/snapshots/latest', requireAuth, async (req, res) => {
       return
     }
     res.json({ data: snapshot })
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// ─── PATCH /api/connections/:id ──────────────────────────────────────────────
+const updateSchema = z.object({
+  name:            z.string().min(1).max(100).optional(),
+  environment:     z.enum(['production', 'uat']).optional(),
+  host:            z.string().min(1).optional(),
+  port:            z.number().int().min(1).max(65535).optional(),
+  database_name:   z.string().optional(),
+  agent_name:      z.string().min(1).optional(),
+  credentials_ref: z.string().optional(),
+})
+
+router.patch('/:id', requireAuth, requireDBA, async (req, res) => {
+  const parsed = updateSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() })
+    return
+  }
+  try {
+    const conn = await getConnectionById(req.params.id)
+    if (!conn) {
+      res.status(404).json({ error: 'Connection not found' })
+      return
+    }
+    const updated = await updateConnection(req.params.id, parsed.data)
+    await logActivity({
+      actorId:    req.user!.id,
+      actorName:  req.user!.email,
+      action:     'connection.updated',
+      targetType: 'connection',
+      targetId:   conn.id,
+      payload:    { name: conn.name, changes: Object.keys(parsed.data) },
+    })
+    res.json({ data: updated })
   } catch (err) {
     res.status(500).json({ error: (err as Error).message })
   }

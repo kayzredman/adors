@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import jwt from 'jsonwebtoken'
 import type { Request, Response, NextFunction } from 'express'
 import type { UserRole } from '@adors/shared'
 
@@ -15,13 +15,22 @@ declare global {
   }
 }
 
-const supabaseUrl = process.env.SUPABASE_URL!
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_KEY!
+// Verify JWTs locally using the shared secret — no GoTrue network round-trip,
+// which was adding 2-4 s of latency to every authenticated request.
+const JWT_SECRET = process.env.SUPABASE_JWT_SECRET
+  ?? 'your-super-secret-jwt-token-with-at-least-32-characters-long'
 
-// Anon client for verifying user JWTs
-const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: { persistSession: false },
-})
+interface SupabaseJwtPayload {
+  sub: string
+  email?: string
+  role?: string
+  exp?: number
+  iat?: number
+}
+
+// LRU-style in-process cache: { userId → { role, expiresAt } }
+const roleCache = new Map<string, { role: UserRole; expiresAt: number }>()
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization
@@ -32,32 +41,41 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   const token = authHeader.slice(7)
 
+  let payload: SupabaseJwtPayload
   try {
-    const { data, error } = await supabaseAuth.auth.getUser(token)
-    if (error || !data.user) {
-      res.status(401).json({ error: 'Invalid or expired token' })
-      return
-    }
+    payload = jwt.verify(token, JWT_SECRET) as SupabaseJwtPayload
+  } catch {
+    res.status(401).json({ error: 'Invalid or expired token' })
+    return
+  }
 
-    // Fetch role from user_profiles
+  const userId = payload.sub
+  const email  = payload.email ?? ''
+
+  // Check role cache first
+  const cached = roleCache.get(userId)
+  if (cached && Date.now() < cached.expiresAt) {
+    req.user = { id: userId, email, role: cached.role }
+    return next()
+  }
+
+  try {
     const { supabase } = await import('../config/supabase.js')
-    const { data: profile, error: profileError } = await supabase
+    const { data: profile, error } = await supabase
       .from('user_profiles')
       .select('role')
-      .eq('id', data.user.id)
+      .eq('id', userId)
       .single()
 
-    if (profileError || !profile) {
+    if (error || !profile) {
       res.status(403).json({ error: 'User profile not found' })
       return
     }
 
-    req.user = {
-      id: data.user.id,
-      email: data.user.email ?? '',
-      role: profile.role as UserRole,
-    }
+    const role = profile.role as UserRole
+    roleCache.set(userId, { role, expiresAt: Date.now() + CACHE_TTL_MS })
 
+    req.user = { id: userId, email, role }
     next()
   } catch {
     res.status(500).json({ error: 'Authentication service error' })

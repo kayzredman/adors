@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Plus, Database, RefreshCw, X, ChevronRight, Loader2, AlertCircle } from 'lucide-react'
+import { Plus, Database, RefreshCw, X, ChevronRight, Loader2, AlertCircle, Pencil, Trash2 } from 'lucide-react'
 import { cn, dbTypeLabel, healthStatusColor } from '@/lib/utils'
 import { HealthGauge } from '@/components/ui/HealthGauge'
 import { api } from '@/lib/api'
+import { useAuth } from '@/components/providers/AuthProvider'
 
 type Connection = {
   id: string
@@ -14,7 +15,9 @@ type Connection = {
   environment: 'production' | 'uat'
   host: string
   port: number
+  database_name?: string
   agent_name: string
+  credentials_ref?: string
   status: string
   health?: { score: number; status: string }
 }
@@ -27,18 +30,26 @@ const DB_PLACEHOLDER: Record<string, string> = {
 }
 
 export default function ConnectionsPage() {
+  const { role } = useAuth()
   const [connections, setConnections] = useState<Connection[]>([])
-  const [loading, setLoading]         = useState(true)
-  const [scanning, setScanning]       = useState<string | null>(null)
-  const [showForm, setShowForm]       = useState(false)
+  const [loading,     setLoading]     = useState(true)
+  const [fetchError,  setFetchError]  = useState<string | null>(null)
+  const [scanning,    setScanning]    = useState<string | null>(null)
+  const [showCreate,  setShowCreate]  = useState(false)
+  const [editConn,    setEditConn]    = useState<Connection | null>(null)
+  const [deleteConn,  setDeleteConn]  = useState<Connection | null>(null)
+
+  const isAdmin = role === 'super_admin'
+  const canWrite = role === 'dba' || role === 'super_admin'
 
   const load = useCallback(async () => {
     setLoading(true)
+    setFetchError(null)
     try {
       const result = await api.connections.list(true)
       setConnections((result.data as Connection[]) ?? [])
-    } catch {
-      // silently ignore — keeps empty state
+    } catch (err) {
+      setFetchError(err instanceof Error ? err.message : 'Failed to load connections')
     } finally {
       setLoading(false)
     }
@@ -69,13 +80,24 @@ export default function ConnectionsPage() {
             Manage registered databases and assigned agents
           </p>
         </div>
-        <button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors"
-        >
-          <Plus className="w-4 h-4" /> Add Connection
-        </button>
+        {canWrite && (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors"
+          >
+            <Plus className="w-4 h-4" /> Add Connection
+          </button>
+        )}
       </div>
+
+      {/* Error banner */}
+      {fetchError && (
+        <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical/5 px-4 py-3 text-sm text-critical">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {fetchError}
+          <button onClick={load} className="ml-auto underline text-xs">Retry</button>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="grid grid-cols-4 gap-4">
@@ -87,7 +109,7 @@ export default function ConnectionsPage() {
         ].map(({ label, value, cls }) => (
           <div key={label} className="rounded-xl border border-border bg-card px-4 py-3">
             <p className="text-xs text-muted-foreground mb-1">{label}</p>
-            <p className={cn('text-2xl font-bold', cls || 'text-foreground')}>{value}</p>
+            <p className={cn('text-2xl font-bold', cls || 'text-foreground')}>{loading ? '–' : value}</p>
           </div>
         ))}
       </div>
@@ -104,12 +126,14 @@ export default function ConnectionsPage() {
             <Database className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
             <p className="font-semibold text-foreground mb-1">No connections registered</p>
             <p className="text-sm text-muted-foreground mb-4">Add your first Oracle, SQL Server, or MariaDB instance</p>
-            <button
-              onClick={() => setShowForm(true)}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors"
-            >
-              <Plus className="w-4 h-4" /> Add First Connection
-            </button>
+            {canWrite && (
+              <button
+                onClick={() => setShowCreate(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-sm font-medium transition-colors"
+              >
+                <Plus className="w-4 h-4" /> Add First Connection
+              </button>
+            )}
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -174,8 +198,9 @@ export default function ConnectionsPage() {
                     </span>
                   </td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-2 opacity-70 group-hover:opacity-100 transition-opacity">
-                      <Link href={`/connections/${conn.id}`} className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium border border-border hover:bg-muted transition-colors text-foreground">
+                    <div className="flex items-center gap-1.5 opacity-70 group-hover:opacity-100 transition-opacity">
+                      <Link href={`/connections/${conn.id}`}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium border border-border hover:bg-muted transition-colors text-foreground">
                         Details <ChevronRight className="w-3 h-3" />
                       </Link>
                       <button
@@ -186,6 +211,24 @@ export default function ConnectionsPage() {
                         <RefreshCw className={cn('w-3 h-3', scanning === conn.id && 'animate-spin')} />
                         Scan
                       </button>
+                      {canWrite && (
+                        <button
+                          onClick={() => setEditConn(conn)}
+                          className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                          title="Edit connection"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          onClick={() => setDeleteConn(conn)}
+                          className="p-1.5 rounded text-muted-foreground hover:text-critical hover:bg-critical/10 transition-colors"
+                          title="Delete connection"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -195,7 +238,28 @@ export default function ConnectionsPage() {
         )}
       </div>
 
-      {showForm && <AddConnectionPanel onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load() }} />}
+      {showCreate && (
+        <ConnectionPanel
+          mode="create"
+          onClose={() => setShowCreate(false)}
+          onSaved={() => { setShowCreate(false); load() }}
+        />
+      )}
+      {editConn && (
+        <ConnectionPanel
+          mode="edit"
+          connection={editConn}
+          onClose={() => setEditConn(null)}
+          onSaved={() => { setEditConn(null); load() }}
+        />
+      )}
+      {deleteConn && (
+        <DeleteConfirm
+          connection={deleteConn}
+          onClose={() => setDeleteConn(null)}
+          onDeleted={() => { setDeleteConn(null); load() }}
+        />
+      )}
     </div>
   )
 }
@@ -205,27 +269,109 @@ function DbIcon({ type }: { type: string }) {
   return <span className={cn('w-2 h-2 rounded-full shrink-0', colors[type] ?? 'bg-muted-foreground')} />
 }
 
-function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState({
-    name:            '',
-    db_type:         'oracle' as 'oracle' | 'mssql' | 'mariadb',
-    environment:     'production' as 'production' | 'uat',
-    host:            '',
-    port:            1521,
-    database_name:   '',
-    agent_name:      '',
-    credentials_ref: '',
-  })
-  const [saving, setSaving]     = useState(false)
-  const [error, setError]       = useState('')
-  const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number } | null>(null)
-  const [testing, setTesting]   = useState(false)
+// ─── Delete Confirmation Dialog ───────────────────────────────────────────────
 
-  function set(field: string, value: string | number) {
+function DeleteConfirm({ connection, onClose, onDeleted }: {
+  connection: Connection
+  onClose:    () => void
+  onDeleted:  () => void
+}) {
+  const [deleting, setDeleting] = useState(false)
+  const [error,    setError]    = useState('')
+
+  async function confirm() {
+    setDeleting(true)
+    setError('')
+    try {
+      await api.connections.delete(connection.id)
+      onDeleted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-background/70 backdrop-blur-sm z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md rounded-2xl border border-critical/30 bg-card shadow-2xl p-6 space-y-4">
+          <div className="flex items-center gap-3">
+            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-critical/10 flex items-center justify-center">
+              <Trash2 className="w-5 h-5 text-critical" />
+            </div>
+            <div>
+              <h2 className="font-bold text-foreground">Delete Connection</h2>
+              <p className="text-sm text-muted-foreground">This action cannot be undone</p>
+            </div>
+          </div>
+
+          <p className="text-sm text-foreground">
+            Are you sure you want to delete <strong>{connection.name}</strong>?{' '}
+            All associated health snapshots and alerts will also be removed.
+          </p>
+
+          {error && (
+            <div className="flex items-center gap-2 rounded-lg border border-critical/30 bg-critical/5 px-3 py-2 text-sm text-critical">
+              <AlertCircle className="w-4 h-4 shrink-0" />{error}
+            </div>
+          )}
+
+          <div className="flex gap-3 justify-end pt-1">
+            <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors text-foreground">
+              Cancel
+            </button>
+            <button onClick={confirm} disabled={deleting}
+              className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-critical hover:bg-critical/80 text-white font-medium transition-colors disabled:opacity-50">
+              {deleting && <Loader2 className="w-4 h-4 animate-spin" />}
+              {deleting ? 'Deleting…' : 'Delete Connection'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ─── Add / Edit Connection Panel ─────────────────────────────────────────────
+
+type FormState = {
+  name:            string
+  db_type:         'oracle' | 'mssql' | 'mariadb'
+  environment:     'production' | 'uat'
+  host:            string
+  port:            number
+  database_name:   string
+  agent_name:      string
+  credentials_ref: string
+}
+
+function ConnectionPanel({ mode, connection, onClose, onSaved }: {
+  mode:        'create' | 'edit'
+  connection?: Connection
+  onClose:     () => void
+  onSaved:     () => void
+}) {
+  const [form, setForm] = useState<FormState>({
+    name:            connection?.name            ?? '',
+    db_type:         connection?.db_type         ?? 'oracle',
+    environment:     connection?.environment     ?? 'production',
+    host:            connection?.host            ?? '',
+    port:            connection?.port            ?? 1521,
+    database_name:   connection?.database_name   ?? '',
+    agent_name:      connection?.agent_name      ?? '',
+    credentials_ref: connection?.credentials_ref ?? '',
+  })
+  const [saving, setSaving]         = useState(false)
+  const [error,  setError]          = useState('')
+  const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number } | null>(null)
+  const [testing, setTesting]       = useState(false)
+
+  function set(field: keyof FormState, value: string | number) {
     setError('')
     setTestResult(null)
     if (field === 'db_type') {
-      setForm(f => ({ ...f, db_type: value as any, port: DB_PORTS[value as string] ?? 1521 }))
+      setForm(f => ({ ...f, db_type: value as FormState['db_type'], port: DB_PORTS[value as string] ?? 1521 }))
     } else {
       setForm(f => ({ ...f, [field]: value }))
     }
@@ -257,16 +403,28 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
     setSaving(true)
     setError('')
     try {
-      await api.connections.create({
-        name:            form.name,
-        db_type:         form.db_type,
-        environment:     form.environment,
-        host:            form.host,
-        port:            Number(form.port),
-        database_name:   form.database_name || undefined,
-        agent_name:      form.agent_name,
-        credentials_ref: form.credentials_ref || undefined,
-      })
+      if (mode === 'create') {
+        await api.connections.create({
+          name:            form.name,
+          db_type:         form.db_type,
+          environment:     form.environment,
+          host:            form.host,
+          port:            Number(form.port),
+          database_name:   form.database_name   || undefined,
+          agent_name:      form.agent_name,
+          credentials_ref: form.credentials_ref || undefined,
+        })
+      } else {
+        await api.connections.update(connection!.id, {
+          name:            form.name,
+          environment:     form.environment,
+          host:            form.host,
+          port:            Number(form.port),
+          database_name:   form.database_name   || undefined,
+          agent_name:      form.agent_name,
+          credentials_ref: form.credentials_ref || undefined,
+        })
+      }
       onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -275,22 +433,24 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
     }
   }
 
+  const isEdit = mode === 'edit'
+
   return (
     <>
       <div className="fixed inset-0 bg-background/60 backdrop-blur-sm z-40" onClick={onClose} />
       <aside className="fixed top-0 right-0 h-full w-[480px] bg-card border-l border-border shadow-2xl z-50 flex flex-col">
-        {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-border">
           <div>
-            <h2 className="font-bold text-lg text-foreground">Add Connection</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">Register a new database in ADORS</p>
+            <h2 className="font-bold text-lg text-foreground">{isEdit ? 'Edit Connection' : 'Add Connection'}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {isEdit ? `Editing ${connection!.name}` : 'Register a new database in ADORS'}
+            </p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Form */}
         <form onSubmit={submit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {error && (
             <div className="flex items-start gap-2 rounded-lg border border-critical/30 bg-critical/5 px-3 py-2.5 text-sm text-critical">
@@ -304,7 +464,7 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Database Type" required>
-              <select className={inputCls} value={form.db_type} onChange={e => set('db_type', e.target.value)}>
+              <select className={inputCls} value={form.db_type} onChange={e => set('db_type', e.target.value)} disabled={isEdit}>
                 <option value="oracle">Oracle</option>
                 <option value="mssql">SQL Server</option>
                 <option value="mariadb">MariaDB</option>
@@ -341,16 +501,7 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
             <input className={inputCls} placeholder="ENV:ORACLE_PROD  (blank = mock mode)" value={form.credentials_ref} onChange={e => set('credentials_ref', e.target.value)} />
           </Field>
 
-          {form.credentials_ref.startsWith('ENV:') && (
-            <div className="rounded-lg border border-brand-500/30 bg-brand-500/5 px-3 py-2.5 text-xs text-brand-400 space-y-1">
-              <p className="font-semibold">Required env vars for <code className="font-mono">{form.credentials_ref}</code>:</p>
-              {['USER', 'PASSWORD', 'HOST', 'PORT', 'DATABASE'].map(k => (
-                <p key={k} className="font-mono text-[11px] text-muted-foreground">{form.credentials_ref.slice(4)}_{k}</p>
-              ))}
-            </div>
-          )}
-
-          {form.credentials_ref && (
+          {!isEdit && form.credentials_ref && (
             <div className="flex items-center gap-3">
               <button type="button" onClick={testConnection} disabled={testing}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50">
@@ -366,7 +517,6 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
           )}
         </form>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-border flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
             {form.credentials_ref ? 'Live adapter will be used' : 'Mock adapter — no credentials needed'}
@@ -378,7 +528,7 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
             <button onClick={submit} disabled={saving}
               className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-medium transition-colors disabled:opacity-50">
               {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-              {saving ? 'Saving…' : 'Save Connection'}
+              {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Connection'}
             </button>
           </div>
         </div>
@@ -387,7 +537,7 @@ function AddConnectionPanel({ onClose, onSaved }: { onClose: () => void; onSaved
   )
 }
 
-const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-500/40'
+const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-500/40 disabled:opacity-50 disabled:cursor-not-allowed'
 
 function Field({ label, required, hint, children }: { label: string; required?: boolean; hint?: string; children: React.ReactNode }) {
   return (

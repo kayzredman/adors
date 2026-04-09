@@ -8,6 +8,7 @@ import alertsRouter from './routes/alerts.js'
 import activityRouter from './routes/activity.js'
 import scriptsRouter from './routes/scripts.js'
 import sandboxRouter from './routes/sandbox.js'
+import meRouter from './routes/me.js'
 import { startHealthScanScheduler, createHealthScanWorker } from './workers/healthScanWorker.js'
 
 const app = express()
@@ -34,6 +35,7 @@ app.use('/api/alerts',      alertsRouter)
 app.use('/api/activity',    activityRouter)
 app.use('/api/scripts',     scriptsRouter)
 app.use('/api/sandbox',     sandboxRouter)
+app.use('/api/me',          meRouter)
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {

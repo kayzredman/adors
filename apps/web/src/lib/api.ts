@@ -28,6 +28,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  me: () => apiFetch<{ data: { id: string; email: string; role: string } }>('/api/me'),
   connections: {
     list:   (withHealth = false) =>
       apiFetch<{ data: unknown[] }>(`/api/connections${withHealth ? '?health=true' : ''}`),
@@ -37,6 +38,11 @@ export const api = {
       apiFetch<{ data: unknown }>(`/api/connections/${id}/scan`, { method: 'POST' }),
     delete: (id: string) =>
       apiFetch<{ message: string }>(`/api/connections/${id}`, { method: 'DELETE' }),
+    update: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ data: unknown }>(`/api/connections/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
     test:   (body: Record<string, unknown>) =>
       apiFetch<{ data: { ok: boolean; latency_ms: number } }>('/api/connections/test', {
         method: 'POST',
