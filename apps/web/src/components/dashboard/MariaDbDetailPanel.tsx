@@ -8,6 +8,18 @@ interface MariaDbDetailPanelProps {
 }
 
 export function MariaDbDetailPanel({ metrics: m, name }: MariaDbDetailPanelProps) {
+  if (m.error) {
+    return (
+      <div className="rounded-xl border border-critical/30 bg-critical/5 p-6 space-y-2">
+        <p className="font-semibold text-critical">Live adapter error — could not retrieve metrics</p>
+        <p className="text-sm font-mono text-muted-foreground break-all">{m.error}</p>
+        <p className="text-xs text-muted-foreground">
+          Use the Edit button to set valid database credentials, then run a Manual Scan.
+        </p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
       {/* Server info + Connections */}

@@ -226,7 +226,7 @@ export class OracleAdapter implements DbAdapter {
     }
 
     return {
-      current_group: current?.GROUP# ?? null,
+      current_group: current?.['GROUP#'] ?? null,
       used_pct:      0,  // V$LOG doesn't expose fill — use V$LOGFILE + events
       fill_chart:    [{ time: '00m', value: 0 }],
       log_counts:    logCounts,

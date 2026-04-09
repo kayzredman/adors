@@ -8,6 +8,19 @@ interface OracleDetailPanelProps {
 }
 
 export function OracleDetailPanel({ metrics: m, name }: OracleDetailPanelProps) {
+  // Show error state when live adapter failed to connect
+  if (m.error) {
+    return (
+      <div className="rounded-xl border border-critical/30 bg-critical/5 p-6 space-y-2">
+        <p className="font-semibold text-critical">Live adapter error — could not retrieve metrics</p>
+        <p className="text-sm font-mono text-muted-foreground break-all">{m.error}</p>
+        <p className="text-xs text-muted-foreground">
+          Use the Edit button to set valid database credentials, then run a Manual Scan.
+        </p>
+      </div>
+    )
+  }
+
   const waitData = Object.entries(m.wait_breakdown ?? {}).map(([k, v]) => ({
     name: k.replace(/_/g, ' '),
     value: v as number,
