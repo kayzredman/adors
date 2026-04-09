@@ -32,12 +32,7 @@ export function Sidebar() {
     <aside className="flex flex-col w-64 h-full bg-card border-r border-border shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-border">
-        <div className="grid grid-cols-2 gap-0.5 w-8 h-8">
-          <span className="rounded-sm bg-red-500" />
-          <span className="rounded-sm bg-orange-400" />
-          <span className="rounded-sm bg-blue-500" />
-          <span className="rounded-sm bg-green-500" />
-        </div>
+        <AdorsLogo />
         <div>
           <p className="font-bold text-lg tracking-tight text-foreground">ADORS</p>
           <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Mission Control</p>
@@ -93,5 +88,23 @@ function AlertBadge() {
     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-critical text-[10px] font-bold text-white px-1">
       3
     </span>
+  )
+}
+
+/** ADORS logo — four overlapping rounded squares, stacked like the brand image */
+function AdorsLogo() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Bottom-left — blue */}
+      <rect x="2"  y="14" width="18" height="18" rx="3.5" fill="#3B82F6" />
+      {/* Bottom-right — green */}
+      <rect x="16" y="14" width="18" height="18" rx="3.5" fill="#10B981" />
+      {/* Top-left — coral red */}
+      <rect x="2"  y="2"  width="18" height="18" rx="3.5" fill="#EF4444" />
+      {/* Top-right — amber orange */}
+      <rect x="16" y="2"  width="18" height="18" rx="3.5" fill="#F59E0B" />
+      {/* Center overlap highlight — subtle white glint */}
+      <rect x="14" y="14" width="8" height="8" rx="1.5" fill="white" fillOpacity="0.12" />
+    </svg>
   )
 }
