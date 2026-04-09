@@ -10,6 +10,7 @@ type Script = {
   db_type: 'oracle' | 'mssql' | 'mariadb'
   risk_level: 'zero' | 'low' | 'medium' | 'high'
   source: 'internal' | 'oem'
+  sql_content?: string
   verified_at: string | null
   created_at: string
 }
