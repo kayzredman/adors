@@ -1,0 +1,95 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light theme */
+    --background:    0 0% 98%;
+    --foreground:    222 47% 11%;
+    --card:          0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover:       0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary:       211 100% 40%;
+    --primary-foreground: 0 0% 100%;
+    --secondary:     214 32% 91%;
+    --secondary-foreground: 222 47% 11%;
+    --muted:         214 32% 91%;
+    --muted-foreground: 215 20% 50%;
+    --accent:        214 32% 91%;
+    --accent-foreground: 222 47% 11%;
+    --destructive:   0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border:        214 32% 88%;
+    --input:         214 32% 88%;
+    --ring:          211 100% 40%;
+    --radius:        0.5rem;
+
+    /* Severity tokens */
+    --critical:   0 84% 60%;
+    --warning:    38 92% 50%;
+    --success:    158 64% 38%;
+    --info:       211 100% 40%;
+  }
+
+  .dark {
+    /* Mission Control dark theme */
+    --background:    222 47% 6%;
+    --foreground:    210 40% 92%;
+    --card:          222 40% 10%;
+    --card-foreground: 210 40% 92%;
+    --popover:       222 40% 10%;
+    --popover-foreground: 210 40% 92%;
+    --primary:       211 100% 55%;
+    --primary-foreground: 222 47% 6%;
+    --secondary:     222 35% 16%;
+    --secondary-foreground: 210 40% 92%;
+    --muted:         222 35% 16%;
+    --muted-foreground: 215 20% 55%;
+    --accent:        222 35% 16%;
+    --accent-foreground: 210 40% 92%;
+    --destructive:   0 63% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --border:        222 35% 18%;
+    --input:         222 35% 18%;
+    --ring:          211 100% 55%;
+
+    --critical:   0 63% 50%;
+    --warning:    38 80% 50%;
+    --success:    158 64% 40%;
+    --info:       211 100% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+}
+
+/* Mission Control scan line effect */
+.scanline {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 114, 206, 0.02) 2px,
+    rgba(0, 114, 206, 0.02) 4px
+  );
+}
+
+/* Health gauge arc */
+.gauge-ring {
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s ease-in-out;
+}
+
+/* Glassmorphism bot panel */
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}

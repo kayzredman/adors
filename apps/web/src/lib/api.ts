@@ -1,0 +1,42 @@
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
+
+async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    ...options,
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error ?? `API error ${res.status}`)
+  }
+
+  return res.json()
+}
+
+export const api = {
+  connections: {
+    list:   (withHealth = false) =>
+      apiFetch<{ data: unknown[] }>(`/api/connections${withHealth ? '?health=true' : ''}`),
+    get:    (id: string) =>
+      apiFetch<{ data: unknown }>(`/api/connections/${id}`),
+    scan:   (id: string) =>
+      apiFetch<{ data: unknown }>(`/api/connections/${id}/scan`, { method: 'POST' }),
+    delete: (id: string) =>
+      apiFetch<{ message: string }>(`/api/connections/${id}`, { method: 'DELETE' }),
+  },
+  alerts: {
+    list:        (params?: Record<string, string>) => {
+      const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+      return apiFetch<{ data: unknown[] }>(`/api/alerts${qs}`)
+    },
+    counts:      () => apiFetch<{ data: Record<string, number> }>('/api/alerts/counts'),
+    acknowledge: (id: string) =>
+      apiFetch<{ data: unknown }>(`/api/alerts/${id}/acknowledge`, { method: 'PATCH' }),
+    resolve:     (id: string) =>
+      apiFetch<{ data: unknown }>(`/api/alerts/${id}/resolve`, { method: 'PATCH' }),
+  },
+  activity: {
+    list: (limit = 20) => apiFetch<{ data: unknown[] }>(`/api/activity?limit=${limit}`),
+  },
+}
