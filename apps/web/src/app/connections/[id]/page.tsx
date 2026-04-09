@@ -24,10 +24,9 @@ export default function ConnectionDetailPage() {
       setLoading(true)
       const [connRes, snapRes] = await Promise.all([
         api.connections.get(id),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/connections/${id}/snapshots/latest`)
-          .then(r => r.ok ? r.json() : null).catch(() => null),
+        api.snapshots.latest(id).catch(() => null),
       ])
-      setData({ connection: (connRes as any).data, snapshot: snapRes?.data ?? null })
+      setData({ connection: (connRes as any).data, snapshot: (snapRes as any)?.data ?? null })
     } catch (e) {
       setError((e as Error).message)
     } finally {

@@ -62,6 +62,10 @@ export const api = {
   activity: {
     list: (limit = 20) => apiFetch<{ data: unknown[] }>(`/api/activity?limit=${limit}`),
   },
+  snapshots: {
+    latest: (connectionId: string) =>
+      apiFetch<{ data: unknown }>(`/api/connections/${connectionId}/snapshots/latest`),
+  },
   scripts: {
     list: (params?: Record<string, string>) => {
       const qs = params ? '?' + new URLSearchParams(params).toString() : ''
