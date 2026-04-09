@@ -1,0 +1,9 @@
+-- Set passwords for all Supabase internal roles to match POSTGRES_PASSWORD
+-- This mirrors what supabase/supabase docker/volumes/db/roles.sql does
+-- NOTE: change to your own passwords for production environments
+\set pgpass `echo "$POSTGRES_PASSWORD"`
+
+ALTER USER authenticator WITH PASSWORD :'pgpass';
+ALTER USER supabase_auth_admin WITH PASSWORD :'pgpass';
+ALTER USER supabase_storage_admin WITH PASSWORD :'pgpass';
+ALTER USER supabase_functions_admin WITH PASSWORD :'pgpass';

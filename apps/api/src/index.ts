@@ -42,10 +42,16 @@ app.use((_req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function bootstrap() {
-  // Start BullMQ scheduler (only in API process — worker runs separately in prod)
-  if (process.env.NODE_ENV !== 'production') {
-    await startHealthScanScheduler()
-    createHealthScanWorker()
+  // Start BullMQ scheduler only when Redis is available
+  if (process.env.NODE_ENV !== 'production' && process.env.REDIS_URL) {
+    try {
+      await startHealthScanScheduler()
+      createHealthScanWorker()
+    } catch (err: any) {
+      console.warn('[workers] BullMQ init failed (Redis unavailable?) — health scan scheduler disabled:', err.message)
+    }
+  } else if (!process.env.REDIS_URL) {
+    console.warn('[workers] REDIS_URL not set — health scan scheduler disabled')
   }
 
   app.listen(PORT, () => {

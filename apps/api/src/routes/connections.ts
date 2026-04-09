@@ -11,8 +11,40 @@ import {
 } from '../services/connectionService.js'
 import { triggerManualScan } from '../services/healthScanner.js'
 import { logActivity } from '../services/activityService.js'
+import { getAdapter, resolveCredentials } from '../adapters/index.js'
 
 const router = Router()
+
+// ─── POST /api/connections/test — test credentials before saving ─────────────
+const testSchema = z.object({
+  db_type:         z.enum(['oracle', 'mssql', 'mariadb']),
+  host:            z.string().min(1),
+  port:            z.number().int().min(1).max(65535),
+  database_name:   z.string().optional(),
+  credentials_ref: z.string().min(1),
+})
+
+router.post('/test', requireAuth, async (req, res) => {
+  const parsed = testSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.flatten() })
+    return
+  }
+
+  const { db_type, host, port, database_name, credentials_ref } = parsed.data
+  try {
+    const creds = resolveCredentials(credentials_ref, {
+      host,
+      port,
+      database: database_name ?? '',
+    })
+    const adapter = await getAdapter(db_type)
+    const result  = await adapter.testConnection(creds)
+    res.json({ data: result })
+  } catch (err: any) {
+    res.json({ data: { ok: false, latency_ms: 0, error: err.message } })
+  }
+})
 
 // ─── GET /api/connections ────────────────────────────────────────────────────
 router.get('/', requireAuth, async (req, res) => {

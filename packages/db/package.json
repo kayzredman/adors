@@ -2,20 +2,20 @@
   "name": "@adors/db",
   "version": "0.1.0",
   "private": true,
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "migrate": "node dist/migrate.js",
-    "seed": "node dist/seed.js",
+    "migrate": "tsx src/migrate.ts",
+    "seed": "tsx src/seed.ts",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
     "@adors/shared": "workspace:*",
-    "@supabase/supabase-js": "^2.49.0"
+    "@supabase/supabase-js": "^2.49.0",
+    "pg": "^8.13.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.0"
   }
 }
