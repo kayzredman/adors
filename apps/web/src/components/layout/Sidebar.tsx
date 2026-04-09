@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import {
   LayoutDashboard,
   MessageSquare,
@@ -11,9 +11,12 @@ import {
   Database,
   Moon,
   Sun,
+  LogOut,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
+import { AdorsLogo } from '@/components/brand/AdorsLogo'
+import { createClient } from '@/lib/supabase/browser'
 
 const NAV_ITEMS = [
   { href: '/',            label: 'Dashboard',    icon: LayoutDashboard },
@@ -26,13 +29,24 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const pathname = usePathname()
+  const router   = useRouter()
   const { theme, setTheme } = useTheme()
+  const supabase = createClient()
+
+  // Don't render on auth pages
+  if (pathname === '/login') return null
+
+  async function handleSignOut() {
+    await supabase.auth.signOut()
+    router.push('/login')
+    router.refresh()
+  }
 
   return (
     <aside className="flex flex-col w-64 h-full bg-card border-r border-border shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-border">
-        <AdorsLogo />
+        <AdorsLogoLocal />
         <div>
           <p className="font-bold text-lg tracking-tight text-foreground">ADORS</p>
           <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Mission Control</p>
@@ -77,6 +91,13 @@ export function Sidebar() {
           {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
           {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
         </button>
+        <button
+          onClick={handleSignOut}
+          className="flex items-center gap-2 text-xs text-muted-foreground hover:text-critical transition-colors"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          Sign out
+        </button>
       </div>
     </aside>
   )
@@ -91,20 +112,7 @@ function AlertBadge() {
   )
 }
 
-/** ADORS logo — four overlapping rounded squares, stacked like the brand image */
-function AdorsLogo() {
-  return (
-    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* Bottom-left — blue */}
-      <rect x="2"  y="14" width="18" height="18" rx="3.5" fill="#3B82F6" />
-      {/* Bottom-right — green */}
-      <rect x="16" y="14" width="18" height="18" rx="3.5" fill="#10B981" />
-      {/* Top-left — coral red */}
-      <rect x="2"  y="2"  width="18" height="18" rx="3.5" fill="#EF4444" />
-      {/* Top-right — amber orange */}
-      <rect x="16" y="2"  width="18" height="18" rx="3.5" fill="#F59E0B" />
-      {/* Center overlap highlight — subtle white glint */}
-      <rect x="14" y="14" width="8" height="8" rx="1.5" fill="white" fillOpacity="0.12" />
-    </svg>
-  )
+/** ADORS logo — imported from shared brand component */
+function AdorsLogoLocal() {
+  return <AdorsLogo size={36} />
 }

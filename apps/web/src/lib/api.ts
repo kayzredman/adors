@@ -1,9 +1,22 @@
+import { createClient } from '@/lib/supabase/browser'
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
 
+async function getToken(): Promise<string | null> {
+  const { data } = await createClient().auth.getSession()
+  return data.session?.access_token ?? null
+}
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = await getToken()
+
   const res = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
   })
 
   if (!res.ok) {
