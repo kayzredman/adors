@@ -1,0 +1,20 @@
+{
+  "name": "adors",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agentic Database Observability & Remediation System",
+  "scripts": {
+    "dev": "pnpm --parallel --filter './apps/*' dev",
+    "build": "pnpm --filter './packages/*' build && pnpm --filter './apps/*' build",
+    "lint": "pnpm --recursive lint",
+    "type-check": "pnpm --recursive type-check",
+    "db:migrate": "pnpm --filter '@adors/db' migrate",
+    "db:seed": "pnpm --filter '@adors/db' seed",
+    "test": "pnpm --recursive test"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

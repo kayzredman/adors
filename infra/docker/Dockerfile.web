@@ -1,0 +1,33 @@
+FROM node:22-alpine AS base
+WORKDIR /app
+RUN npm install -g pnpm@9
+
+FROM base AS development
+COPY package.json pnpm-workspace.yaml ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/shared/package.json ./packages/shared/
+RUN pnpm install
+COPY apps/web ./apps/web
+COPY packages/shared ./packages/shared
+WORKDIR /app/apps/web
+EXPOSE 3000
+CMD ["pnpm", "dev"]
+
+FROM base AS builder
+COPY package.json pnpm-workspace.yaml ./
+COPY apps/web/package.json ./apps/web/
+COPY packages/shared/package.json ./packages/shared/
+RUN pnpm install --frozen-lockfile
+COPY apps/web ./apps/web
+COPY packages/shared ./packages/shared
+RUN pnpm --filter @adors/shared build
+RUN pnpm --filter @adors/web build
+
+FROM node:22-alpine AS production
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=builder /app/apps/web/.next/standalone ./
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder /app/apps/web/public ./apps/web/public
+EXPOSE 3000
+CMD ["node", "apps/web/server.js"]
