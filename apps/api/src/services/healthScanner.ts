@@ -1,6 +1,7 @@
 import type { DbConnection, HealthSnapshot, HealthStatus } from '@adors/shared'
 import { supabase } from '../config/supabase.js'
-import { getAdapter, resolveCredentials } from '../adapters/index.js'
+import { getAdapter } from '../adapters/index.js'
+import { getConnectionCredentials } from './connectionService.js'
 
 // ─── Mock Adapter Interface ───────────────────────────────────────────────────
 // Phase 2 will replace these with real oracledb / mssql / mysql2 drivers
@@ -258,41 +259,39 @@ function getMockMetrics(conn: DbConnection): HealthMetrics {
 }
 
 /**
- * Route to live adapter if credentials_ref is set, otherwise mock.
- * Live adapter returns raw driver metrics; we wrap them in the HealthMetrics
- * shape so the rest of the pipeline (alerts, snapshots) works unchanged.
+ * Route to live adapter if credentials are stored, otherwise use mock.
+ * When live credentials exist and the adapter fails, we do NOT fall back to
+ * mock — the DBA needs to see real errors, not fake green data.
  */
 async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
-  if (!conn.credentials_ref) {
+  const creds = await getConnectionCredentials(conn.id)
+
+  if (!creds) {
+    // No credentials stored — use mock adapter (demo/seed connections)
     return getMockMetrics(conn)
   }
 
-  try {
-    const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
-    const creds = resolveCredentials(conn.credentials_ref, {
-      host:     conn.host,
-      port:     conn.port ?? defaultPorts[conn.db_type] ?? 3306,
-      database: conn.service_name ?? conn.database_name ?? conn.name,
-    })
+  const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
+  const dbCreds = {
+    host:     conn.host,
+    port:     conn.port ?? defaultPorts[conn.db_type] ?? 3306,
+    database: conn.service_name ?? conn.database_name ?? '',
+    username: creds.username,
+    password: creds.password,
+  }
 
-    const adapter  = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
-    const details  = await adapter.getHealthMetrics(creds)
+  const adapter = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
+  const details = await adapter.getHealthMetrics(dbCreds)  // throws on failure — intentional
 
-    // Derive score + status from the live details
-    const score  = deriveScore(conn.db_type as string, details)
-    const status: HealthStatus = score >= 80 ? 'healthy' : score >= 60 ? 'warning' : 'critical'
+  const score  = deriveScore(conn.db_type as string, details)
+  const status: HealthStatus = score >= 80 ? 'healthy' : score >= 60 ? 'warning' : 'critical'
 
-    return {
-      score,
-      status,
-      blocked_sessions: Number((details as any).sessions?.blocked ?? (details as any).blocking_spids ?? 0),
-      active_alerts: 0,
-      details: { ...details, adapter: 'live' },
-    }
-  } catch (err: any) {
-    // If live adapter fails (e.g., driver not installed, network issue), fall back + log
-    console.warn(`[healthScanner] Live adapter failed for ${conn.name}: ${err.message}. Falling back to mock.`)
-    return getMockMetrics(conn)
+  return {
+    score,
+    status,
+    blocked_sessions: Number((details as any).sessions?.blocked ?? (details as any).blocking_spids ?? 0),
+    active_alerts: 0,
+    details: { ...details, adapter: 'live' },
   }
 }
 
@@ -327,7 +326,25 @@ function deriveScore(dbType: string, details: Record<string, unknown>): number {
 // ─── Core Scanner ────────────────────────────────────────────────────────────
 
 export async function scanConnection(conn: DbConnection): Promise<HealthSnapshot> {
-  const metrics = await getMetrics(conn)
+  let metrics: HealthMetrics
+  try {
+    metrics = await getMetrics(conn)
+  } catch (err: any) {
+    // Live adapter threw (bad credentials, network, driver error)
+    // Write a real critical snapshot — DBA must see this, not mock green data
+    console.error(`[healthScanner] Live scan failed for ${conn.name}: ${err.message}`)
+    metrics = {
+      score:            0,
+      status:           'critical',
+      blocked_sessions: 0,
+      active_alerts:    1,
+      details: {
+        adapter:       'live',
+        error:         err.message,
+        error_at:      new Date().toISOString(),
+      },
+    }
+  }
 
   const snapshot = {
     connection_id:    conn.id,

@@ -17,7 +17,7 @@ type Connection = {
   port: number
   database_name?: string
   agent_name: string
-  credentials_ref?: string
+  has_credentials: boolean
   status: string
   health?: { score: number; status: string }
 }
@@ -157,6 +157,10 @@ export default function ConnectionsPage() {
                           {conn.name}
                         </Link>
                         <p className="text-xs text-muted-foreground font-mono">{conn.host}:{conn.port}</p>
+                        {conn.has_credentials
+                          ? <p className="text-[10px] text-success font-medium">🔒 Credentials set</p>
+                          : <p className="text-[10px] text-warning font-medium">⚠ Mock mode</p>
+                        }
                       </div>
                     </div>
                   </td>
@@ -336,14 +340,15 @@ function DeleteConfirm({ connection, onClose, onDeleted }: {
 // ─── Add / Edit Connection Panel ─────────────────────────────────────────────
 
 type FormState = {
-  name:            string
-  db_type:         'oracle' | 'mssql' | 'mariadb'
-  environment:     'production' | 'uat'
-  host:            string
-  port:            number
-  database_name:   string
-  agent_name:      string
-  credentials_ref: string
+  name:          string
+  db_type:       'oracle' | 'mssql' | 'mariadb'
+  environment:   'production' | 'uat'
+  host:          string
+  port:          number
+  database_name: string
+  agent_name:    string
+  username:      string
+  password:      string
 }
 
 function ConnectionPanel({ mode, connection, onClose, onSaved }: {
@@ -353,14 +358,15 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
   onSaved:     () => void
 }) {
   const [form, setForm] = useState<FormState>({
-    name:            connection?.name            ?? '',
-    db_type:         connection?.db_type         ?? 'oracle',
-    environment:     connection?.environment     ?? 'production',
-    host:            connection?.host            ?? '',
-    port:            connection?.port            ?? 1521,
-    database_name:   connection?.database_name   ?? '',
-    agent_name:      connection?.agent_name      ?? '',
-    credentials_ref: connection?.credentials_ref ?? '',
+    name:          connection?.name          ?? '',
+    db_type:       connection?.db_type       ?? 'oracle',
+    environment:   connection?.environment   ?? 'production',
+    host:          connection?.host          ?? '',
+    port:          connection?.port          ?? 1521,
+    database_name: connection?.database_name ?? '',
+    agent_name:    connection?.agent_name    ?? '',
+    username:      '',
+    password:      '',
   })
   const [saving, setSaving]         = useState(false)
   const [error,  setError]          = useState('')
@@ -378,14 +384,21 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
   }
 
   async function testConnection() {
-    if (!form.host || !form.credentials_ref) {
-      setError('Host and Credentials Ref are required to test the connection.')
+    if (!form.host || !form.username || !form.password) {
+      setError('Host, username and password are required to test.')
       return
     }
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await api.connections.test(form as unknown as Record<string, unknown>)
+      const result = await api.connections.test({
+        db_type:       form.db_type,
+        host:          form.host,
+        port:          form.port,
+        database_name: form.database_name || undefined,
+        username:      form.username,
+        password:      form.password,
+      } as unknown as Record<string, unknown>)
       setTestResult(result.data ?? { ok: false, latency_ms: 0 })
     } catch {
       setTestResult({ ok: false, latency_ms: 0 })
@@ -405,24 +418,27 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
     try {
       if (mode === 'create') {
         await api.connections.create({
-          name:            form.name,
-          db_type:         form.db_type,
-          environment:     form.environment,
-          host:            form.host,
-          port:            Number(form.port),
-          database_name:   form.database_name   || undefined,
-          agent_name:      form.agent_name,
-          credentials_ref: form.credentials_ref || undefined,
+          name:          form.name,
+          db_type:       form.db_type,
+          environment:   form.environment,
+          host:          form.host,
+          port:          Number(form.port),
+          database_name: form.database_name || undefined,
+          agent_name:    form.agent_name,
+          username:      form.username || undefined,
+          password:      form.password || undefined,
         })
       } else {
         await api.connections.update(connection!.id, {
-          name:            form.name,
-          environment:     form.environment,
-          host:            form.host,
-          port:            Number(form.port),
-          database_name:   form.database_name   || undefined,
-          agent_name:      form.agent_name,
-          credentials_ref: form.credentials_ref || undefined,
+          name:          form.name,
+          environment:   form.environment,
+          host:          form.host,
+          port:          Number(form.port),
+          database_name: form.database_name || undefined,
+          agent_name:    form.agent_name,
+          // Only send password update if both fields are filled
+          username:      (form.username && form.password) ? form.username : undefined,
+          password:      (form.username && form.password) ? form.password : undefined,
         })
       }
       onSaved()
@@ -497,11 +513,33 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
             <input className={inputCls} placeholder="e.g. OraBot" value={form.agent_name} onChange={e => set('agent_name', e.target.value)} />
           </Field>
 
-          <Field label="Credentials Ref" hint='Format: ENV:PREFIX — set PREFIX_USER and PREFIX_PASSWORD in environment. Leave blank to use mock adapter.'>
-            <input className={inputCls} placeholder="ENV:ORACLE_PROD  (blank = mock mode)" value={form.credentials_ref} onChange={e => set('credentials_ref', e.target.value)} />
-          </Field>
+          <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Database Credentials</p>
+            <Field label="Username" hint={isEdit ? 'Leave blank to keep existing credentials' : undefined}>
+              <input
+                className={inputCls}
+                placeholder={isEdit ? '(unchanged)' : 'e.g. adors_monitor'}
+                autoComplete="off"
+                value={form.username}
+                onChange={e => set('username', e.target.value)}
+              />
+            </Field>
+            <Field label="Password">
+              <input
+                className={inputCls}
+                type="password"
+                placeholder={isEdit ? '(unchanged)' : 'Enter password'}
+                autoComplete="new-password"
+                value={form.password}
+                onChange={e => set('password', e.target.value)}
+              />
+            </Field>
+            {isEdit && connection?.has_credentials && !form.username && !form.password && (
+              <p className="text-[11px] text-success">✓ Credentials stored — leave blank to keep them</p>
+            )}
+          </div>
 
-          {!isEdit && form.credentials_ref && (
+          {form.username && form.password && (
             <div className="flex items-center gap-3">
               <button type="button" onClick={testConnection} disabled={testing}
                 className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg border border-border hover:bg-muted transition-colors disabled:opacity-50">
@@ -519,7 +557,7 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
 
         <div className="px-6 py-4 border-t border-border flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
-            {form.credentials_ref ? 'Live adapter will be used' : 'Mock adapter — no credentials needed'}
+            {(connection?.has_credentials || form.username) ? '🔒 Credentials encrypted server-side' : 'No credentials — mock adapter will be used'}
           </p>
           <div className="flex gap-3">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted transition-colors text-foreground">

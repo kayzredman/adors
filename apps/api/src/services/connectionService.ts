@@ -1,47 +1,95 @@
 import { supabase } from '../config/supabase.js'
 import { redis } from '../config/redis.js'
-import type { DbConnection } from '@adors/shared'
+import { encrypt, decrypt } from '../lib/crypto.js'
+import type { DbConnection, DbCredentials } from '@adors/shared'
+
+// Columns never sent to the browser
+const SAFE_SELECT = 'id,name,db_type,environment,host,port,database_name,agent_name,prod_pair_id,status,last_checked_at,created_at,credentials_enc'
+
+/** Strip raw crypto columns and compute has_credentials flag */
+function toPublic(row: any): DbConnection {
+  const { credentials_enc, credentials_iv, credentials_tag, ...rest } = row
+  return { ...rest, has_credentials: !!credentials_enc } as DbConnection
+}
 
 export async function getAllConnections(): Promise<DbConnection[]> {
   const { data, error } = await supabase
     .from('connections')
-    .select('*')
+    .select(SAFE_SELECT)
     .order('environment', { ascending: true })
     .order('db_type', { ascending: true })
 
   if (error) throw new Error(error.message)
-  return data as DbConnection[]
+  return (data ?? []).map(toPublic)
 }
 
 export async function getConnectionById(id: string): Promise<DbConnection | null> {
   const { data, error } = await supabase
     .from('connections')
-    .select('*')
+    .select(SAFE_SELECT)
     .eq('id', id)
     .single()
 
   if (error) return null
-  return data as DbConnection
+  return toPublic(data)
+}
+
+/**
+ * Decrypt and return credentials for scanner use only.
+ * Returns null when no credentials are stored (mock mode).
+ */
+export async function getConnectionCredentials(
+  id: string,
+): Promise<{ username: string; password: string } | null> {
+  const { data, error } = await supabase
+    .from('connections')
+    .select('credentials_enc,credentials_iv,credentials_tag')
+    .eq('id', id)
+    .single()
+
+  if (error || !data?.credentials_enc) return null
+
+  try {
+    const plain = decrypt({
+      enc: data.credentials_enc,
+      iv:  data.credentials_iv,
+      tag: data.credentials_tag,
+    })
+    return JSON.parse(plain) as { username: string; password: string }
+  } catch {
+    return null
+  }
 }
 
 export async function createConnection(payload: {
-  name: string
-  db_type: DbConnection['db_type']
-  environment: DbConnection['environment']
-  host: string
-  port: number
+  name:          string
+  db_type:       DbConnection['db_type']
+  environment:   DbConnection['environment']
+  host:          string
+  port:          number
   database_name?: string
-  agent_name: string
-  credentials_ref?: string
+  agent_name:    string
+  username?:     string
+  password?:     string
 }): Promise<DbConnection> {
+  const { username, password, ...rest } = payload
+
+  const insert: Record<string, unknown> = { ...rest }
+  if (username && password) {
+    const enc = encrypt(JSON.stringify({ username, password }))
+    insert.credentials_enc = enc.enc
+    insert.credentials_iv  = enc.iv
+    insert.credentials_tag = enc.tag
+  }
+
   const { data, error } = await supabase
     .from('connections')
-    .insert(payload)
-    .select()
+    .insert(insert)
+    .select(SAFE_SELECT)
     .single()
 
   if (error) throw new Error(error.message)
-  return data as DbConnection
+  return toPublic(data)
 }
 
 export async function updateConnectionStatus(
@@ -59,24 +107,35 @@ export async function updateConnectionStatus(
 export async function updateConnection(
   id: string,
   payload: Partial<{
-    name:            string
-    environment:     DbConnection['environment']
-    host:            string
-    port:            number
-    database_name:   string
-    agent_name:      string
-    credentials_ref: string
+    name:          string
+    environment:   DbConnection['environment']
+    host:          string
+    port:          number
+    database_name: string
+    agent_name:    string
+    username:      string
+    password:      string
   }>,
 ): Promise<DbConnection> {
+  const { username, password, ...rest } = payload
+
+  const update: Record<string, unknown> = { ...rest }
+  if (username && password) {
+    const enc = encrypt(JSON.stringify({ username, password }))
+    update.credentials_enc = enc.enc
+    update.credentials_iv  = enc.iv
+    update.credentials_tag = enc.tag
+  }
+
   const { data, error } = await supabase
     .from('connections')
-    .update(payload)
+    .update(update)
     .eq('id', id)
-    .select()
+    .select(SAFE_SELECT)
     .single()
 
   if (error) throw new Error(error.message)
-  return data as DbConnection
+  return toPublic(data)
 }
 
 export async function deleteConnection(id: string): Promise<void> {
