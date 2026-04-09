@@ -25,7 +25,11 @@ export async function middleware(request: NextRequest) {
   // Refresh expired sessions — MUST be called before any redirect checks
   const { data: { user } } = await supabase.auth.getUser()
 
-  const isLoginPage = request.nextUrl.pathname.startsWith('/login')
+  const isLoginPage  = request.nextUrl.pathname.startsWith('/login')
+  const isApiRoute   = request.nextUrl.pathname.startsWith('/api/')
+
+  // Next.js API routes handle their own auth — don't redirect them
+  if (isApiRoute) return response
 
   if (!user && !isLoginPage) {
     const loginUrl = request.nextUrl.clone()
