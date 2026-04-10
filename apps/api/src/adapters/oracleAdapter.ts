@@ -66,19 +66,24 @@ function ensureThickInit(oracledb: typeof import('oracledb')): boolean {
   }
 }
 
-async function loadOracledb(forceThick = false): Promise<typeof import('oracledb')> {
+async function loadOracledb(): Promise<typeof import('oracledb')> {
   const mod = await import('oracledb').catch(() => {
     throw new Error('oracledb package not installed. Run: pnpm add oracledb')
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const oracledb: typeof import('oracledb') = (mod as any).default ?? mod
-  if (forceThick || process.env.ORACLE_THICK_CLIENT === 'true') {
-    ensureThickInit(oracledb)
+
+  // Eagerly probe for an Oracle Client on first load.
+  // This ensures ALL connections use the same mode from the start — avoiding
+  // NJS-106 race conditions when initOracleClient() is called mid-flight while
+  // other connections are already open in thin mode.
+  if (_thickAvailable === null) {
+    ensureThickInit(oracledb)   // sets _thickAvailable to true|false (never null after this)
   }
   return oracledb
 }
 
-/** Connect, auto-upgrading to thick mode on NJS-138. */
+/** Connect — thick mode is already decided by loadOracledb() at first call. */
 async function getOracleConnection(creds: DbCredentials): Promise<any> {
   const oracledb = await loadOracledb()
   const connParams = {
@@ -92,19 +97,13 @@ async function getOracleConnection(creds: DbCredentials): Promise<any> {
   try {
     return await oracledb.getConnection(connParams)
   } catch (err: any) {
-    // NJS-138 = thin mode + Oracle 11g (or older) — auto-retry with thick mode
+    // NJS-138 = server version requires thick mode but no Oracle Client was found at startup
     if (err.message?.includes('NJS-138') || err.errorNum === 138) {
-      console.log(`[oracleAdapter] NJS-138 detected for ${creds.host} — trying thick mode auto-detect`)
-      const ok = ensureThickInit(oracledb)
-      if (!ok || _thickAvailable === false) {
-        throw new Error(
-          'Oracle 11g requires Oracle Instant Client (thick mode). ' +
-          'Install Instant Client from https://www.oracle.com/database/technologies/instant-client/winx64-64-downloads.html ' +
-          'then set ORACLE_LIB_DIR=<install path> in apps/api/.env and restart the API.'
-        )
-      }
-      // Thick init succeeded — retry the connection
-      return await oracledb.getConnection(connParams)
+      throw new Error(
+        'Oracle 11g requires Oracle Instant Client (thick mode). ' +
+        'Install Instant Client from https://www.oracle.com/database/technologies/instant-client/winx64-64-downloads.html ' +
+        'then set ORACLE_LIB_DIR=<install path> in apps/api/.env and restart the API.'
+      )
     }
     throw err
   }
