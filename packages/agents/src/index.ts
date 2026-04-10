@@ -13,55 +13,70 @@ export interface ChatMessage {
   content: string
 }
 
+// A single connection's live state as injected into the system prompt.
+export interface ConnectionContext {
+  connectionName:   string
+  dbType:           string
+  environment:      string
+  healthScore?:     number
+  healthStatus?:    string
+  activeAlerts?:    number
+  blockedSessions?: number
+  metrics?:         Record<string, unknown>
+}
+
 export interface AgentContext {
-  connectionName?: string
-  dbType?: string
-  environment?: string
-  healthScore?: number
-  healthStatus?: string
-  activeAlerts?: number
-  metrics?: Record<string, unknown>
+  // Full fleet of connections this bot is responsible for — always populated.
+  fleet?: ConnectionContext[]
+  // Optionally, one specific connection the user is looking at in the UI.
+  focusedConnection?: ConnectionContext
 }
 
 // ─── System prompts ──────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPTS: Record<BotId, string> = {
-  orabot: `You are OraBot, an expert Oracle Database AI assistant for ADORS (Automated Database Operations & Response System).
-You specialize in Oracle RDBMS — including 11g through 23c — with deep knowledge of:
-- AWR/ASH reports, wait events, execution plan analysis
-- Tablespace management, undo / redo / archivelog pressure
-- Blocking sessions, deadlocks, ORA-errors
-- Data Guard replication, standby lag, apply/transport gaps
-- SYSDBA-level commands, privileged operations and their risks
-- Oracle Instant Client, thick/thin mode differences
+  orabot: `You are OraBot, an expert Oracle Database AI assistant embedded in ADORS (Automated Database Operations & Response System).
 
-When given health metrics, interpret them concisely. Suggest specific SQL or shell remediation steps. 
-Always confirm risk level before suggesting destructive operations (ALTER SYSTEM KILL SESSION etc.).
-Be concise — 3-6 sentences max unless asked to elaborate.`,
+ADORS gives you REAL live data: connection names, health scores, active alerts, blocked sessions, and current metrics for every Oracle instance this system monitors. This data will appear in a [Live data from ADORS] block below. You MUST use it.
 
-  msbot: `You are MsBot, an expert SQL Server AI assistant for ADORS (Automated Database Operations & Response System).
-You specialize in SQL Server (2012–2022) and Azure SQL with deep knowledge of:
-- DMVs, wait stats analysis, spinlock contention
-- Buffer pool pressure, plan cache thrash, memory grants
-- Always On AG health — primary/secondary role, sync state, queue depth
-- Log shipping, database mirroring (deprecated but still in use)
-- Blocking chains, CXPACKET / PAGEIOLATCH / SOS_SCHEDULER_YIELD waits
-- Index fragmentation, statistics staleness, query store
+Rules:
+- Always refer to connections by their exact name (e.g. PROD_ORA_01, UAT_ORA_01).
+- If the user asks about a metric that is present in the live data, quote the actual value.
+- If the data shows a problem (critical score, blocked sessions, alerts), proactively call it out even if not asked.
+- If a metric the user asks about is NOT in the live data (e.g. backup trends — not currently tracked), say so explicitly and offer the SQL they can run on that specific connection.
+- Never fabricate metric values.
 
-When given health metrics, interpret them concisely. Suggest T-SQL solutions with risk notes.
-Be concise — 3-6 sentences max unless asked to elaborate.`,
+Your expertise: Oracle 11g–23c, AWR/ASH, wait events, tablespace management, undo/redo pressure, blocking sessions, deadlocks, ORA-errors, Data Guard replication, SYSDBA operations.
+When suggesting remediation, confirm risk level before proposing destructive commands (ALTER SYSTEM KILL SESSION etc.).
+Be concise — 3–6 sentences unless asked to elaborate.`,
 
-  marbot: `You are MarBot, an expert MariaDB AI assistant for ADORS (Automated Database Operations & Response System).
-You specialize in MariaDB (10.4+) and MySQL-compatible databases with deep knowledge of:
-- InnoDB buffer pool efficiency, hit ratio degradation
-- Replication lag — slave IO/SQL thread, seconds_behind_master
-- Slow query log analysis, long-running transactions
-- Galera cluster split-brain, SST/IST operations
-- Table/schema size growth, data directory space
-- Connection pool saturation, max_connections tuning
+  msbot: `You are MsBot, an expert SQL Server AI assistant embedded in ADORS (Automated Database Operations & Response System).
 
-When given health metrics, interpret them concisely. Suggest specific SQL or config remediation.
-Be concise — 3-6 sentences max unless asked to elaborate.`,
+ADORS gives you REAL live data: connection names, health scores, active alerts, blocked sessions, and current metrics for every SQL Server instance this system monitors. This data will appear in a [Live data from ADORS] block below. You MUST use it.
+
+Rules:
+- Always refer to connections by their exact name (e.g. PROD_SQL_01, UAT_SQL_01).
+- If the user asks about a metric that is present in the live data, quote the actual value.
+- If the data shows a problem (critical score, blocking spids, memory pressure), proactively call it out.
+- If a metric the user asks about is NOT in the live data, say so and offer the T-SQL/DMV query for that specific instance.
+- Never fabricate metric values.
+
+Your expertise: SQL Server 2012–2022, Azure SQL, DMVs, wait stats, buffer pool, plan cache, Always On AG, blocking chains, CXPACKET/PAGEIOLATCH waits, index fragmentation, query store.
+Be concise — 3–6 sentences unless asked to elaborate.`,
+
+  marbot: `You are MarBot, an expert MariaDB AI assistant embedded in ADORS (Automated Database Operations & Response System).
+
+ADORS gives you REAL live data: connection names, health scores, active alerts, blocked sessions, and current metrics for every MariaDB instance this system monitors. This data will appear in a [Live data from ADORS] block below. You MUST use it.
+
+Rules:
+- Always refer to connections by their exact name (e.g. PROD_MAR_01, UAT_MAR_01).
+- If the user asks about a metric that is present in the live data, quote the actual value.
+- If the data shows a problem (critical score, replication lag, low buffer pool hit ratio), proactively call it out.
+- If a metric the user asks about is NOT in the live data, say so and offer the SQL/config query for that specific server.
+- Never fabricate metric values.
+
+Your expertise: MariaDB 10.4+, MySQL-compatible, InnoDB buffer pool, replication lag, slow query log, Galera cluster, connection pool saturation, max_connections tuning.
+Be concise — 3–6 sentences unless asked to elaborate.`,
 }
 
 // ─── Model selection ─────────────────────────────────────────────────────────
@@ -83,22 +98,88 @@ function makeClient(): OpenAI | null {
 }
 
 // ─── Context injection ───────────────────────────────────────────────────────
+// Selects the most diagnostically relevant metrics per DB type so we don't
+// waste token budget on sparkline arrays or redundant fields.
+
+const KEY_METRICS: Record<string, string[]> = {
+  oracle: [
+    'db_version', 'uptime_days', 'tablespace_usage_pct',
+    'sessions_active', 'sessions_blocked', 'sessions_total',
+    'num_clients', 'avg_response_ms',
+    'execution_rate', 'parse_rate',
+    'redo_log_switches_per_hr', 'undo_usage_pct',
+    'data_guard_lag_sec',
+  ],
+  mssql: [
+    'db_version', 'uptime_days',
+    'active_connections', 'max_connections',
+    'buffer_pool_memory_pct', 'page_life_expectancy_sec',
+    'blocking_spids', 'deadlocks_per_min',
+    'log_space_used_pct', 'ag_sync_state', 'ag_queue_hardened',
+  ],
+  mariadb: [
+    'db_version', 'uptime_days',
+    'active_connections', 'max_connections',
+    'buffer_pool_hit_ratio', 'buffer_pool_memory_pct',
+    'replication_lag_sec', 'slave_io_running', 'slave_sql_running',
+    'slow_queries_per_min', 'long_running_txn_count',
+  ],
+}
+
+function formatConnectionBlock(c: ConnectionContext, focused = false): string {
+  const header = focused
+    ? `▶ ${c.connectionName} [${c.environment.toUpperCase()}] ← FOCUSED`
+    : `• ${c.connectionName} [${c.environment.toUpperCase()}]`
+
+  const lines = [header]
+
+  if (c.healthScore !== undefined) {
+    const badge = c.healthStatus === 'critical' ? '🔴' : c.healthStatus === 'warning' ? '🟡' : '🟢'
+    lines.push(`  Health: ${badge} ${c.healthScore}/100 (${c.healthStatus ?? 'unknown'})`)
+  } else {
+    lines.push(`  Health: ⚪ no snapshot yet`)
+  }
+
+  if (c.activeAlerts)    lines.push(`  Active alerts: ${c.activeAlerts}`)
+  if (c.blockedSessions) lines.push(`  Blocked sessions: ${c.blockedSessions}`)
+
+  if (c.metrics && Object.keys(c.metrics).length) {
+    const allowedKeys = KEY_METRICS[c.dbType] ?? []
+    const relevant = Object.entries(c.metrics)
+      .filter(([k, v]) =>
+        allowedKeys.includes(k) &&
+        v !== null && v !== undefined &&
+        !Array.isArray(v) &&         // skip sparkline arrays
+        typeof v !== 'object',        // skip nested objects
+      )
+    if (relevant.length) {
+      lines.push(`  Metrics:`)
+      relevant.forEach(([k, v]) => lines.push(`    ${k}: ${v}`))
+    }
+  }
+
+  return lines.join('\n')
+}
 
 function buildContextBlock(ctx: AgentContext): string {
-  if (!ctx.connectionName) return ''
-  const lines = [`[Current DB context]`]
-  if (ctx.connectionName) lines.push(`Connection: ${ctx.connectionName} (${ctx.dbType ?? 'unknown'}, ${ctx.environment ?? 'unknown'})`)
-  if (ctx.healthScore !== undefined) lines.push(`Health score: ${ctx.healthScore}/100 — ${ctx.healthStatus ?? 'unknown'}`)
-  if (ctx.activeAlerts !== undefined) lines.push(`Active alerts: ${ctx.activeAlerts}`)
-  if (ctx.metrics && Object.keys(ctx.metrics).length) {
-    const snap = Object.entries(ctx.metrics)
-      .filter(([, v]) => v !== null && v !== undefined)
-      .slice(0, 10)
-      .map(([k, v]) => `  ${k}: ${v}`)
-      .join('\n')
-    if (snap) lines.push(`Recent metrics:\n${snap}`)
+  const parts: string[] = []
+
+  if (ctx.fleet && ctx.fleet.length > 0) {
+    parts.push(`[Live data from ADORS — ${ctx.fleet.length} monitored connection(s)]`)
+    for (const conn of ctx.fleet) {
+      const isFocused = ctx.focusedConnection?.connectionName === conn.connectionName
+      parts.push(formatConnectionBlock(conn, isFocused))
+    }
+    parts.push(
+      `\nThis is REAL live data. Reference these connections and metrics directly in your answers.`,
+      `If a metric is absent from a connection's snapshot, say so — do not fabricate values.`,
+    )
+  } else if (ctx.focusedConnection) {
+    parts.push(`[Live data from ADORS]`)
+    parts.push(formatConnectionBlock(ctx.focusedConnection, true))
   }
-  return lines.join('\n')
+
+  return parts.join('\n')
 }
 
 // ─── Main: streaming chat ─────────────────────────────────────────────────────
