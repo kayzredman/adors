@@ -25,10 +25,11 @@ export class MariaDbAdapter implements DbAdapter {
     })
 
     try {
-      const [globalStatus, innodbStatus, replStatus] = await Promise.all([
+      const [globalStatus, innodbStatus, replStatus, diskMounts] = await Promise.all([
         this.#queryGlobalStatus(conn),
         this.#queryInnodbStatus(conn),
         this.#queryReplication(conn),
+        this.#queryDiskMounts(conn).catch(() => []),
       ])
 
       const get = (map: Record<string, string>, key: string) => Number(map[key] ?? 0)
@@ -101,6 +102,10 @@ export class MariaDbAdapter implements DbAdapter {
         disk_used_gb:   0,
         disk_total_gb:  0,
         disk_io_chart:  [{ t: new Date().toISOString(), v: 0 }],
+        // Backup history (no native SQL table in MariaDB)
+        backup_history: [],
+        // Disk / schema utilization
+        disk_mounts: diskMounts,
       }
     } finally {
       await conn.end()
@@ -165,5 +170,30 @@ export class MariaDbAdapter implements DbAdapter {
       // Not a replica
       return { is_running: false, lag_sec: 0 }
     }
+  }
+
+  async #queryDiskMounts(conn: any) {
+    const [rows] = await conn.query(`
+      SELECT
+        table_schema                                                      AS mount,
+        table_schema                                                      AS label,
+        ROUND(SUM(data_length + index_length) / 1073741824, 3)           AS total_gb,
+        ROUND(SUM(data_length + index_length) / 1073741824, 3)           AS used_gb,
+        0                                                                  AS free_gb,
+        100                                                                AS used_pct,
+        COUNT(*)                                                           AS table_count
+      FROM information_schema.tables
+      WHERE table_schema NOT IN ('information_schema','performance_schema','sys','mysql')
+      GROUP BY table_schema
+      ORDER BY total_gb DESC
+    `)
+    return (rows as any[]).map((r: any) => ({
+      mount:       r.mount,
+      label:       r.label + ` (${r.table_count} tables)`,
+      total_gb:    Number(r.total_gb ?? 0),
+      used_gb:     Number(r.used_gb  ?? 0),
+      free_gb:     0,
+      used_pct:    100,
+    }))
   }
 }

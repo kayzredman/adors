@@ -115,7 +115,7 @@ export class OracleAdapter implements DbAdapter {
 
     try {
       const [
-        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat,
+        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts,
       ] = await Promise.all([
         this.#queryDbProps(conn),
         this.#querySessions(conn),
@@ -125,6 +125,8 @@ export class OracleAdapter implements DbAdapter {
         this.#queryTablespaces(conn),
         this.#queryRedoLog(conn),
         this.#querySysstat(conn),
+        this.#queryBackups(conn).catch(() => []),
+        this.#queryDiskMounts(conn).catch(() => []),
       ])
 
       return {
@@ -195,6 +197,10 @@ export class OracleAdapter implements DbAdapter {
         log_count_unused:     redoLog.log_counts['UNUSED']   ?? 0,
         redo_log_switches_hr: 0,
         sga_hit_ratio_pct:    0,
+        // Backup history (RMAN)
+        backup_history: backups,
+        // Disk / tablespace utilization
+        disk_mounts:    diskMounts,
       }
     } finally {
       await conn.close()
@@ -365,5 +371,55 @@ export class OracleAdapter implements DbAdapter {
       avg_response_ms:      0,
       db_cpu_ratio:         0,
     }
+  }
+
+  async #queryBackups(conn: any) {
+    // v$rman_backup_job_details available Oracle 10g+
+    const { rows } = await conn.execute(
+      `SELECT * FROM (
+         SELECT status, start_time, end_time,
+           ROUND((end_time - start_time) * 24 * 60, 1) AS duration_min,
+           ROUND(output_bytes / 1024 / 1024 / 1024, 2) AS size_gb,
+           input_type
+         FROM v$rman_backup_job_details
+         ORDER BY start_time DESC
+       ) WHERE ROWNUM <= 10`,
+      [], { outFormat: 4002 },
+    )
+    return (rows as any[]).map(r => ({
+      type:         r.INPUT_TYPE ?? 'RMAN',
+      status:       r.STATUS ?? 'UNKNOWN',
+      started_at:   r.START_TIME ? new Date(r.START_TIME).toISOString() : null,
+      finished_at:  r.END_TIME   ? new Date(r.END_TIME).toISOString()   : null,
+      duration_min: Number(r.DURATION_MIN ?? 0),
+      size_gb:      Number(r.SIZE_GB ?? 0),
+    }))
+  }
+
+  async #queryDiskMounts(conn: any) {
+    // All tablespaces with used/free from dba_data_files + dba_free_space (11g+)
+    const { rows } = await conn.execute(
+      `SELECT df.tablespace_name,
+              ROUND(df.total_gb, 2)                                  AS total_gb,
+              ROUND(df.total_gb - NVL(fs.free_gb, 0), 2)            AS used_gb,
+              ROUND(NVL(fs.free_gb, 0), 2)                           AS free_gb,
+              CASE WHEN df.total_gb > 0
+                   THEN ROUND((1 - NVL(fs.free_gb, 0) / df.total_gb) * 100, 1)
+                   ELSE 0 END                                        AS used_pct
+       FROM (SELECT tablespace_name, SUM(bytes)/1073741824 AS total_gb
+             FROM dba_data_files GROUP BY tablespace_name) df
+       LEFT JOIN (SELECT tablespace_name, SUM(bytes)/1073741824 AS free_gb
+                  FROM dba_free_space GROUP BY tablespace_name) fs
+              ON df.tablespace_name = fs.tablespace_name
+       ORDER BY used_pct DESC`,
+      [], { outFormat: 4002 },
+    )
+    return (rows as any[]).map(r => ({
+      mount:    r.TABLESPACE_NAME,
+      total_gb: Number(r.TOTAL_GB ?? 0),
+      used_gb:  Number(r.USED_GB  ?? 0),
+      free_gb:  Number(r.FREE_GB  ?? 0),
+      used_pct: Number(r.USED_PCT ?? 0),
+    }))
   }
 }

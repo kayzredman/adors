@@ -227,6 +227,66 @@ export function OracleDetailPanel({ metrics: m, name }: OracleDetailPanelProps) 
           </div>
         </div>
       </div>
+
+      {/* ── Row 6: Tablespace Utilization ───────────────────────── */}
+      {(m.disk_mounts ?? []).length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tablespace Utilization</p>
+          <div className="space-y-2">
+            {(m.disk_mounts as any[]).map((ts: any) => (
+              <div key={ts.mount} className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="font-mono text-foreground">{ts.mount}</span>
+                  <span className="text-muted-foreground">{ts.used_gb} / {ts.total_gb} GB — {ts.used_pct}%</span>
+                </div>
+                <div className="bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-2 rounded-full ${ts.used_pct >= 90 ? 'bg-critical' : ts.used_pct >= 75 ? 'bg-warning' : 'bg-success'}`}
+                    style={{ width: `${Math.min(100, ts.used_pct)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Row 7: Backup History (RMAN) ────────────────────────── */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Backup History (RMAN)</p>
+        {(m.backup_history ?? []).length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No RMAN backup history found — requires SELECT on V$RMAN_BACKUP_JOB_DETAILS</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left pb-1 pr-3 font-medium">Type</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Status</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Started</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Duration</th>
+                  <th className="text-right pb-1 font-medium">Size (GB)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(m.backup_history as any[]).map((b: any, i: number) => (
+                  <tr key={i} className="border-b border-border/30">
+                    <td className="py-1 pr-3 font-mono">{b.type}</td>
+                    <td className={`py-1 pr-3 font-semibold ${b.status === 'COMPLETED' ? 'text-success' : b.status === 'FAILED' ? 'text-critical' : 'text-warning'}`}>
+                      {b.status}
+                    </td>
+                    <td className="py-1 pr-3 text-muted-foreground">
+                      {b.started_at ? new Date(b.started_at).toLocaleString() : '—'}
+                    </td>
+                    <td className="py-1 pr-3 tabular-nums">{b.duration_min} min</td>
+                    <td className="py-1 tabular-nums text-right">{b.size_gb}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

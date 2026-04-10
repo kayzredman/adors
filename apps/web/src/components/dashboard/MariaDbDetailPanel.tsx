@@ -141,6 +141,39 @@ export function MariaDbDetailPanel({ metrics: m, name }: MariaDbDetailPanelProps
           </div>
         </div>
       </div>
+
+      {/* ── Schema / DB Sizes ────────────────────────────────────── */}
+      {(m.disk_mounts ?? []).length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Database Schema Sizes</p>
+          <div className="space-y-2">
+            {(m.disk_mounts as any[]).map((s: any) => (
+              <div key={s.mount} className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="font-mono text-foreground">{s.label ?? s.mount}</span>
+                  <span className="text-muted-foreground">{s.used_gb} GB</span>
+                </div>
+                <div className="bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className="h-2 rounded-full bg-brand-500"
+                    style={{
+                      width: `${Math.min(100, (s.used_gb / Math.max(...(m.disk_mounts as any[]).map((x: any) => x.used_gb), 0.001)) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Backup History ───────────────────────────────────────── */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-2">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Backup History</p>
+        <p className="text-sm text-muted-foreground italic">
+          MariaDB does not expose backup history via SQL. Use <span className="font-mono">mariabackup</span> or <span className="font-mono">mysqldump</span> logs on the host to track backups.
+        </p>
+      </div>
     </div>
   )
 }

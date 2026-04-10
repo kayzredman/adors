@@ -150,6 +150,68 @@ export function MssqlDetailPanel({ metrics: m, name }: MssqlDetailPanelProps) {
           </div>
         </div>
       </div>
+
+      {/* ── Disk / Volume Mounts ─────────────────────────────────── */}
+      {(m.disk_mounts ?? []).length > 0 && (
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Disk / Volume Utilization</p>
+          <div className="space-y-2">
+            {(m.disk_mounts as any[]).map((v: any) => (
+              <div key={v.mount} className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span className="font-mono text-foreground">{v.label ?? v.mount}</span>
+                  <span className="text-muted-foreground">{(v.total_gb - v.free_gb).toFixed(1)} / {v.total_gb} GB — {v.used_pct}%</span>
+                </div>
+                <div className="bg-muted rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-2 rounded-full ${v.used_pct >= 90 ? 'bg-critical' : v.used_pct >= 75 ? 'bg-warning' : 'bg-success'}`}
+                    style={{ width: `${Math.min(100, v.used_pct)}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Backup History ───────────────────────────────────────── */}
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Backup History</p>
+        {(m.backup_history ?? []).length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No backup history found — requires SELECT on msdb.dbo.backupset</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left pb-1 pr-3 font-medium">Type</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Database</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Started</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Duration</th>
+                  <th className="text-right pb-1 font-medium">Size (GB)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(m.backup_history as any[]).map((b: any, i: number) => (
+                  <tr key={i} className="border-b border-border/30">
+                    <td className="py-1 pr-3">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${b.type === 'Full' ? 'bg-brand-500/20 text-brand-400' : b.type === 'Log' ? 'bg-success/20 text-success' : 'bg-warning/20 text-warning'}`}>
+                        {b.type}
+                      </span>
+                    </td>
+                    <td className="py-1 pr-3 font-mono">{b.destination?.split('\\').pop() ?? '—'}</td>
+                    <td className="py-1 pr-3 text-muted-foreground">
+                      {b.started_at ? new Date(b.started_at).toLocaleString() : '—'}
+                    </td>
+                    <td className="py-1 pr-3 tabular-nums">{b.duration_min} min</td>
+                    <td className="py-1 tabular-nums text-right">{b.size_gb}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

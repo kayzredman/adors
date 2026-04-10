@@ -30,13 +30,15 @@ export class MssqlAdapter implements DbAdapter {
     })
 
     try {
-      const [version, memory, sessions, waits, blocking, cpuIo] = await Promise.all([
+      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts] = await Promise.all([
         this.#queryVersion(pool),
         this.#queryMemory(pool),
         this.#querySessions(pool),
         this.#queryWaits(pool),
         this.#queryBlocking(pool),
         this.#queryCpuIo(pool),
+        this.#queryBackups(pool).catch(() => []),
+        this.#queryDiskMounts(pool).catch(() => []),
       ])
 
       // Return flat keys matching mock adapter shape (MssqlDetailPanel reads these directly)
@@ -77,6 +79,10 @@ export class MssqlAdapter implements DbAdapter {
         // Log (placeholder — requires additional query)
         log_flush_per_sec:         0,
         log_cache_hit_pct:         0,
+        // Backup history
+        backup_history:            backups,
+        // Disk / volume utilization
+        disk_mounts:               diskMounts,
 
         // Legacy nested shape kept for backwards compatibility
         connections: {
@@ -236,6 +242,60 @@ export class MssqlAdapter implements DbAdapter {
       count: Number(r.recordset[0]?.cnt ?? 0),
       chart: [{ t: new Date().toISOString(), v: Number(r.recordset[0]?.cnt ?? 0) }],
     }
+  }
+
+  async #queryBackups(pool: any) {
+    const r = await pool.request().query(`
+      SELECT TOP 10
+        bs.database_name,
+        bs.backup_start_date,
+        bs.backup_finish_date,
+        DATEDIFF(minute, bs.backup_start_date, bs.backup_finish_date) AS duration_min,
+        ROUND(CAST(bs.backup_size AS float) / 1073741824, 2)          AS size_gb,
+        CASE bs.type
+          WHEN 'D' THEN 'Full'
+          WHEN 'I' THEN 'Differential'
+          WHEN 'L' THEN 'Log'
+          ELSE bs.type
+        END AS backup_type,
+        bs.is_copy_only,
+        bmf.physical_device_name AS destination
+      FROM msdb.dbo.backupset bs
+      LEFT JOIN msdb.dbo.backupmediafamily bmf ON bs.media_set_id = bmf.media_set_id
+      ORDER BY bs.backup_finish_date DESC
+    `)
+    return r.recordset.map((row: any) => ({
+      type:         row.backup_type ?? 'Full',
+      status:       'COMPLETED',
+      started_at:   row.backup_start_date  ? new Date(row.backup_start_date).toISOString()  : null,
+      finished_at:  row.backup_finish_date ? new Date(row.backup_finish_date).toISOString() : null,
+      duration_min: Number(row.duration_min ?? 0),
+      size_gb:      Number(row.size_gb ?? 0),
+      destination:  row.destination ?? '',
+    }))
+  }
+
+  async #queryDiskMounts(pool: any) {
+    // sys.dm_os_volume_stats requires SQL Server 2008 R2+
+    const r = await pool.request().query(`
+      SELECT DISTINCT
+        vs.volume_mount_point                                          AS mount,
+        ISNULL(vs.logical_volume_name, vs.volume_mount_point)         AS label,
+        ROUND(CAST(vs.total_bytes     AS float) / 1073741824, 1)      AS total_gb,
+        ROUND(CAST(vs.available_bytes AS float) / 1073741824, 1)      AS free_gb,
+        ROUND((1.0 - CAST(vs.available_bytes AS float) / vs.total_bytes) * 100, 1) AS used_pct
+      FROM sys.master_files mf
+      CROSS APPLY sys.dm_os_volume_stats(mf.database_id, mf.file_id) vs
+      ORDER BY vs.volume_mount_point
+    `)
+    return r.recordset.map((row: any) => ({
+      mount:    row.mount,
+      label:    row.label,
+      total_gb: Number(row.total_gb ?? 0),
+      used_gb:  Number(row.total_gb ?? 0) - Number(row.free_gb ?? 0),
+      free_gb:  Number(row.free_gb  ?? 0),
+      used_pct: Number(row.used_pct ?? 0),
+    }))
   }
 
   async #queryCpuIo(pool: any) {
