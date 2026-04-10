@@ -111,14 +111,28 @@ adors/
 
 ## Build Phases
 
-- **Phase 1** — Project scaffold, auth, connections manager, health scanner (mock adapters)
-- **Phase 2** — Live DB adapters (oracledb / mssql / mysql2), real health metrics
-- **Phase 3** — Agent bots with tool-calling via GitHub Models API
-- **Phase 4** — Script Library, UAT Sandbox execution engine
-- **Phase 5** — Alerts Center, BullMQ cron jobs, Supabase Realtime UI
-- **Phase 6** — WhatsApp (Baileys) + Teams notifications, audit log
-- **Phase 7** — Analytics module, time-series trends, anomaly scoring
-- **Phase 8** — Light theme, Docker prod hardening, security audit
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 1** | ✅ Complete | Project scaffold, auth, connections manager, health scanner (mock adapters) |
+| **Phase 2** | ✅ Complete | Live DB adapters — oracledb / mssql / mysql2, real health metrics, detail panels |
+| **Phase 3** | 🔨 Next | Analytics module — fleet health trends, per-connection 30-day deep dive |
+| **Phase 4** | Planned | Agent bots with tool-calling via GitHub Models API (OraBot, MsBot, MarBot) |
+| **Phase 5** | Planned | Script Library, UAT Sandbox execution engine |
+| **Phase 6** | Planned | Alerts Center, BullMQ cron jobs, Supabase Realtime UI |
+| **Phase 7** | Planned | WhatsApp (Baileys) + Teams notifications, audit log |
+| **Phase 8** | Planned | Light theme, Docker prod hardening, security audit |
+
+### Phase 2 — Live Adapters (Completed)
+- **Oracle** (`oracledb` v6): thin/thick auto-detection, Oracle 11g support via Instant Client probe, SYSDBA/SYSOPER privilege, 11g SQL compatibility (`ROWNUM` instead of `FETCH FIRST`, `VERSION` instead of `VERSION_FULL`)
+- **MSSQL** (`mssql`): DMV-backed metrics — wait types, blocking SPIDs, buffer pool, CPU, I/O
+- **MariaDB** (`mysql2`): InnoDB buffer hit ratio, replication lag, query throughput
+- All adapters: ESM interop, flat metric keys, `{t, v}` chart format
+- Oracle thick mode: auto-scans `ORACLE_HOME`, `C:\oracle\*`, `C:\app\*` for `oci.dll` at startup (no manual config needed if Instant Client is at a standard path)
+
+### Phase 3 — Analytics (Next)
+- `/analytics` — Fleet health dashboard: score trends over time, prod vs UAT avg, worst performers
+- `/connections/:id/analytics` — Per-connection 30-day metric sparklines and deep dive
+- API: `GET /api/analytics/fleet?days=7` and `GET /api/analytics/:id?days=30`
 
 ---
 
@@ -127,7 +141,7 @@ adors/
 ```bash
 # Prerequisites: Docker, Node.js 22+, pnpm
 
-git clone https://github.com/YOUR_ORG/adors.git
+git clone https://github.com/kayzredman/adors.git
 cd adors
 pnpm install
 
