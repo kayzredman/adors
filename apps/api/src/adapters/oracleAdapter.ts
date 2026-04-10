@@ -115,7 +115,7 @@ export class OracleAdapter implements DbAdapter {
 
     try {
       const [
-        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts,
+        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts, haState,
       ] = await Promise.all([
         this.#queryDbProps(conn),
         this.#querySessions(conn),
@@ -127,6 +127,7 @@ export class OracleAdapter implements DbAdapter {
         this.#querySysstat(conn),
         this.#queryBackups(conn).catch(() => []),
         this.#queryDiskMounts(conn).catch(() => []),
+        this.#queryHaState(conn).catch(() => ({ type: 'none', details: [] })),
       ])
 
       return {
@@ -201,6 +202,8 @@ export class OracleAdapter implements DbAdapter {
         backup_history: backups,
         // Disk / tablespace utilization
         disk_mounts:    diskMounts,
+        // HA / Data Guard state
+        ha_state:       haState,
       }
     } finally {
       await conn.close()
@@ -394,6 +397,126 @@ export class OracleAdapter implements DbAdapter {
       duration_min: Number(r.DURATION_MIN ?? 0),
       size_gb:      Number(r.SIZE_GB ?? 0),
     }))
+  }
+
+  async #queryHaState(conn: any) {
+    // ── 1. Data Guard (v$dataguard_status available 10g+) ──────────────────────
+    // First determine DB role — works on all versions via v$database
+    const roleRes = await conn.execute(
+      `SELECT db_unique_name, database_role, protection_mode, protection_level,
+              open_mode, log_mode
+       FROM v$database`,
+      [], { outFormat: 4002 },
+    ).catch(() => null)
+
+    const dbRow = roleRes?.rows?.[0]
+    if (!dbRow) return { type: 'none' as const, details: [] }
+
+    const role = String(dbRow.DATABASE_ROLE ?? '').trim()   // PRIMARY / PHYSICAL STANDBY / LOGICAL STANDBY / SNAPSHOT STANDBY
+    const mode = String(dbRow.PROTECTION_MODE ?? '').trim() // MAXIMUM PROTECTION / AVAILABILITY / PERFORMANCE
+
+    // Check archive destinations to detect if DG is configured
+    const destRes = await conn.execute(
+      `SELECT dest_name, target, archiver, schedule, destination,
+              status, applied_scn, error
+       FROM v$archive_dest
+       WHERE target = 'STANDBY' AND status <> 'INACTIVE'`,
+      [], { outFormat: 4002 },
+    ).catch(() => ({ rows: [] }))
+
+    const standbyDests = (destRes?.rows ?? []) as any[]
+
+    // v$dataguard_status messages (10g+)
+    const dgMsgRes = await conn.execute(
+      `SELECT * FROM (
+         SELECT message, timestamp, severity
+         FROM v$dataguard_status
+         ORDER BY timestamp DESC
+       ) WHERE ROWNUM <= 5`,
+      [], { outFormat: 4002 },
+    ).catch(() => ({ rows: [] }))
+    const dgMessages = ((dgMsgRes?.rows ?? []) as any[]).map(r => ({
+      message:   String(r.MESSAGE ?? ''),
+      timestamp: r.TIMESTAMP ? new Date(r.TIMESTAMP).toISOString() : null,
+      severity:  String(r.SEVERITY ?? ''),
+    }))
+
+    // v$managed_standby — apply/redo state (standby side)
+    const msRes = await conn.execute(
+      `SELECT process, status, thread#, sequence#, block#, blocks
+       FROM v$managed_standby
+       WHERE process <> 'RFS' OR status <> 'IDLE'`,
+      [], { outFormat: 4002 },
+    ).catch(() => ({ rows: [] }))
+    const managedProcs = ((msRes?.rows ?? []) as any[]).map(r => ({
+      process:   String(r.PROCESS  ?? ''),
+      status:    String(r.STATUS   ?? ''),
+      thread:    Number(r['THREAD#'] ?? 0),
+      sequence:  Number(r['SEQUENCE#'] ?? 0),
+    }))
+
+    // Lag from v$dataguard_stats (11g+) — graceful fallback
+    const lagRes = await conn.execute(
+      `SELECT name, value, time_computed
+       FROM v$dataguard_stats
+       WHERE name IN ('apply lag','transport lag','estimated startup time')`,
+      [], { outFormat: 4002 },
+    ).catch(() => ({ rows: [] }))
+    const dgStats: Record<string, string> = {}
+    for (const r of (lagRes?.rows ?? []) as any[]) {
+      dgStats[String(r.NAME)] = String(r.VALUE ?? '')
+    }
+
+    // Only surface as 'dataguard' if either role is standby OR active dests exist
+    const isDg = role !== 'PRIMARY' || standbyDests.length > 0
+    if (isDg) {
+      return {
+        type:             'dataguard' as const,
+        db_unique_name:   String(dbRow.DB_UNIQUE_NAME ?? ''),
+        local_role:       role,
+        protection_mode:  mode,
+        open_mode:        String(dbRow.OPEN_MODE  ?? ''),
+        log_mode:         String(dbRow.LOG_MODE   ?? ''),
+        apply_lag:        dgStats['apply lag']     ?? null,
+        transport_lag:    dgStats['transport lag'] ?? null,
+        managed_procs:    managedProcs,
+        recent_messages:  dgMessages,
+        standby_dests:    standbyDests.map(r => ({
+          dest_name:   String(r.DEST_NAME   ?? ''),
+          destination: String(r.DESTINATION ?? ''),
+          status:      String(r.STATUS      ?? ''),
+          archiver:    String(r.ARCHIVER    ?? ''),
+          error:       r.ERROR ? String(r.ERROR) : null,
+        })),
+        details: standbyDests.map(r => ({
+          dest_name:   String(r.DEST_NAME   ?? ''),
+          destination: String(r.DESTINATION ?? ''),
+          status:      String(r.STATUS      ?? ''),
+          error:       r.ERROR ? String(r.ERROR) : null,
+        })),
+      }
+    }
+
+    // ── 2. Streams / GoldenGate (best-effort) ─────────────────────────────────
+    const ggRes = await conn.execute(
+      `SELECT capture_name, status, error_number, error_message
+       FROM dba_capture`,
+      [], { outFormat: 4002 },
+    ).catch(() => null)
+    if (ggRes?.rows?.length) {
+      return {
+        type:       'streams' as const,
+        local_role: 'SOURCE',
+        details:    (ggRes.rows as any[]).map(r => ({
+          capture_name:  String(r.CAPTURE_NAME   ?? ''),
+          status:        String(r.STATUS         ?? ''),
+          error_number:  r.ERROR_NUMBER  ? Number(r.ERROR_NUMBER) : null,
+          error_message: r.ERROR_MESSAGE ? String(r.ERROR_MESSAGE) : null,
+        })),
+      }
+    }
+
+    return { type: 'none' as const, details: [] }
   }
 
   async #queryDiskMounts(conn: any) {

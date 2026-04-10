@@ -2,6 +2,159 @@
 
 import { MetricChart, Sparkline, WaitBreakdownChart, StorageCylinder } from '@/components/ui/Charts'
 
+// ── HA / Data Guard state card ────────────────────────────────────────────────
+
+const DG_ROLE_COLOR: Record<string, string> = {
+  'PRIMARY':           'text-success',
+  'PHYSICAL STANDBY':  'text-brand-400',
+  'LOGICAL STANDBY':   'text-warning',
+  'SNAPSHOT STANDBY':  'text-muted-foreground',
+}
+
+function DgStatusBadge({ value }: { value: string }) {
+  const v = (value ?? '').toUpperCase()
+  const cls =
+    v === 'VALID' || v === 'APPLYING' || v === 'CONNECTED'
+      ? 'bg-success/15 text-success'
+      : v === 'DEFERRED' || v === 'ALTERNATE'
+      ? 'bg-warning/15 text-warning'
+      : v === 'ERROR' || v === 'FAILED'
+      ? 'bg-critical/15 text-critical'
+      : 'bg-muted text-muted-foreground'
+  return <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${cls}`}>{value || '—'}</span>
+}
+
+function OracleHaStateCard({ ha }: { ha: any }) {
+  if (!ha || ha.type === 'none') {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">HA / Replication</p>
+        <span className="ml-auto text-sm text-muted-foreground italic">Standalone — no Data Guard or Streams configuration detected</span>
+      </div>
+    )
+  }
+
+  if (ha.type === 'dataguard') {
+    const roleColor = DG_ROLE_COLOR[ha.local_role] ?? 'text-foreground'
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        {/* Header row */}
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Data Guard</p>
+          <span className={`text-sm font-bold ${roleColor}`}>{ha.local_role}</span>
+          {ha.db_unique_name && (
+            <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded text-foreground">{ha.db_unique_name}</span>
+          )}
+          {ha.protection_mode && (
+            <span className="text-xs text-muted-foreground">{ha.protection_mode}</span>
+          )}
+          <span className="ml-auto text-xs text-muted-foreground">{ha.open_mode} / {ha.log_mode}</span>
+        </div>
+
+        {/* Lag metrics (standby) */}
+        {(ha.apply_lag || ha.transport_lag) && (
+          <div className="flex gap-6 text-sm">
+            <div>
+              <p className="text-xs text-muted-foreground">Apply Lag</p>
+              <p className={`font-bold ${ha.apply_lag && ha.apply_lag !== '+00 00:00:00' ? 'text-warning' : 'text-success'}`}>
+                {ha.apply_lag ?? '—'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Transport Lag</p>
+              <p className={`font-bold ${ha.transport_lag && ha.transport_lag !== '+00 00:00:00' ? 'text-warning' : 'text-success'}`}>
+                {ha.transport_lag ?? '—'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Managed standby processes */}
+        {ha.managed_procs?.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground mb-1">Apply / Redo Processes</p>
+            <div className="flex flex-wrap gap-2">
+              {ha.managed_procs.map((p: any, i: number) => (
+                <span key={i} className="text-xs font-mono bg-muted px-2 py-0.5 rounded">
+                  {p.process} · <DgStatusBadge value={p.status} /> · seq {p.sequence}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Standby destinations */}
+        {ha.standby_dests?.length > 0 && (
+          <div className="overflow-x-auto">
+            <p className="text-xs font-semibold text-muted-foreground mb-1">Archive Destinations (Standby)</p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground">
+                  <th className="text-left pb-1 pr-3 font-medium">Dest</th>
+                  <th className="text-left pb-1 pr-3 font-medium">Target</th>
+                  <th className="text-left pb-1 font-medium">Status</th>
+                  <th className="text-left pb-1 pl-3 font-medium">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ha.standby_dests.map((d: any, i: number) => (
+                  <tr key={i} className="border-b border-border/30">
+                    <td className="py-1 pr-3 font-mono">{d.dest_name}</td>
+                    <td className="py-1 pr-3 text-muted-foreground truncate max-w-[200px]">{d.destination || '—'}</td>
+                    <td className="py-1 pr-3"><DgStatusBadge value={d.status} /></td>
+                    <td className={`py-1 pl-3 text-xs ${d.error ? 'text-critical' : 'text-muted-foreground'}`}>
+                      {d.error ?? 'OK'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Recent DG status messages */}
+        {ha.recent_messages?.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground mb-1">Recent Status Messages</p>
+            <div className="space-y-1">
+              {ha.recent_messages.map((msg: any, i: number) => (
+                <div key={i} className="text-xs flex gap-2">
+                  <span className="text-muted-foreground shrink-0">
+                    {msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '—'}
+                  </span>
+                  <span className={msg.severity === 'Error' ? 'text-critical' : 'text-foreground'}>{msg.message}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (ha.type === 'streams') {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+        <div className="flex items-center gap-3">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">HA / Replication</p>
+          <span className="text-sm font-bold text-brand-400">Oracle Streams</span>
+        </div>
+        <div className="space-y-1">
+          {ha.details.map((d: any, i: number) => (
+            <div key={i} className="flex items-center gap-3 text-xs">
+              <span className="font-mono text-foreground">{d.capture_name}</span>
+              <DgStatusBadge value={d.status} />
+              {d.error_message && <span className="text-critical">{d.error_message}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}
+
 interface OracleDetailPanelProps {
   metrics: Record<string, any>
   name: string
@@ -228,7 +381,10 @@ export function OracleDetailPanel({ metrics: m, name }: OracleDetailPanelProps) 
         </div>
       </div>
 
-      {/* ── Row 6: Tablespace Utilization ───────────────────────── */}
+      {/* ── Row 6: HA / Data Guard state ────────────────────────── */}
+      <OracleHaStateCard ha={m.ha_state} />
+
+      {/* ── Row 7: Tablespace Utilization ───────────────────────── */}
       {(m.disk_mounts ?? []).length > 0 && (
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Tablespace Utilization</p>
