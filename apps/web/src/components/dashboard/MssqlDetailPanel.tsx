@@ -2,6 +2,152 @@
 
 import { MetricChart, Sparkline } from '@/components/ui/Charts'
 
+// ── HA / Replication state card ───────────────────────────────────────────────
+
+const HA_LABELS: Record<string, string> = {
+  alwayson:   'Always On AG',
+  logshipping: 'Log Shipping',
+  mirroring:  'Database Mirroring',
+  none:       'Standalone',
+}
+
+const HA_COLORS: Record<string, string> = {
+  alwayson:    'text-success',
+  logshipping: 'text-brand-400',
+  mirroring:   'text-warning',
+  none:        'text-muted-foreground',
+}
+
+function SyncBadge({ value }: { value: string }) {
+  const health = (value ?? '').toUpperCase()
+  const cls =
+    health === 'HEALTHY' || health === 'SYNCHRONIZED' || health === 'SYNCHRONIZING'
+      ? 'bg-success/15 text-success'
+      : health === 'PARTIALLY_HEALTHY'
+      ? 'bg-warning/15 text-warning'
+      : health === 'NOT_HEALTHY' || health === 'SUSPENDED' || health === 'DISCONNECTED'
+      ? 'bg-critical/15 text-critical'
+      : 'bg-muted text-muted-foreground'
+  return <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${cls}`}>{value ?? '—'}</span>
+}
+
+function HaStateCard({ ha }: { ha: any }) {
+  if (!ha || ha.type === 'none') {
+    return (
+      <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">HA / Replication</p>
+        <span className="ml-auto text-sm text-muted-foreground italic">Standalone — no HA configuration detected</span>
+      </div>
+    )
+  }
+
+  const label = HA_LABELS[ha.type] ?? ha.type
+  const colorCls = HA_COLORS[ha.type] ?? 'text-foreground'
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">HA / Replication</p>
+        <span className={`text-sm font-bold ${colorCls}`}>{label}</span>
+        {ha.ag_name && <span className="font-mono text-xs text-foreground bg-muted px-2 py-0.5 rounded">{ha.ag_name}</span>}
+        <span className="ml-auto text-xs font-semibold text-muted-foreground uppercase">{ha.local_role}</span>
+        {ha.sync_health && <SyncBadge value={ha.sync_health} />}
+      </div>
+
+      {/* Always On AG details */}
+      {ha.type === 'alwayson' && ha.details?.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left pb-1 pr-3 font-medium">Partner</th>
+                <th className="text-left pb-1 pr-3 font-medium">Role</th>
+                <th className="text-left pb-1 pr-3 font-medium">Connected</th>
+                <th className="text-left pb-1 pr-3 font-medium">Sync Health</th>
+                <th className="text-right pb-1 pr-3 font-medium">Send Queue</th>
+                <th className="text-right pb-1 font-medium">Redo Queue</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ha.details.map((r: any, i: number) => (
+                <tr key={i} className="border-b border-border/30">
+                  <td className="py-1 pr-3 font-mono">{r.partner}</td>
+                  <td className="py-1 pr-3 font-semibold">{r.local_role}</td>
+                  <td className="py-1 pr-3"><SyncBadge value={r.connected} /></td>
+                  <td className="py-1 pr-3"><SyncBadge value={r.sync_health} /></td>
+                  <td className="py-1 pr-3 tabular-nums text-right">{(r.log_send_queue_kb / 1024).toFixed(1)} MB</td>
+                  <td className="py-1 tabular-nums text-right">{(r.redo_queue_kb / 1024).toFixed(1)} MB</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Log Shipping details */}
+      {ha.type === 'logshipping' && ha.details?.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left pb-1 pr-3 font-medium">Primary DB</th>
+                <th className="text-left pb-1 pr-3 font-medium">Secondary</th>
+                <th className="text-left pb-1 pr-3 font-medium">Last Backup</th>
+                <th className="text-left pb-1 pr-3 font-medium">Last Restored</th>
+                <th className="text-right pb-1 font-medium">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ha.details.map((r: any, i: number) => (
+                <tr key={i} className="border-b border-border/30">
+                  <td className="py-1 pr-3 font-mono">{r.primary_database}</td>
+                  <td className="py-1 pr-3 font-mono">{r.secondary_server ? `${r.secondary_server}/${r.secondary_database}` : '—'}</td>
+                  <td className="py-1 pr-3 text-muted-foreground">{r.last_backup_date ? new Date(r.last_backup_date).toLocaleString() : '—'}</td>
+                  <td className="py-1 pr-3 text-muted-foreground">{r.last_restored_date ? new Date(r.last_restored_date).toLocaleString() : '—'}</td>
+                  <td className="py-1 text-right">
+                    <SyncBadge value={r.status === 1 ? 'OK' : r.status === 2 ? 'WARNING' : 'CRITICAL'} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Mirroring details */}
+      {ha.type === 'mirroring' && ha.details?.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-muted-foreground">
+                <th className="text-left pb-1 pr-3 font-medium">Database</th>
+                <th className="text-left pb-1 pr-3 font-medium">Role</th>
+                <th className="text-left pb-1 pr-3 font-medium">State</th>
+                <th className="text-left pb-1 pr-3 font-medium">Safety</th>
+                <th className="text-left pb-1 pr-3 font-medium">Partner</th>
+                <th className="text-left pb-1 font-medium">Witness</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ha.details.map((r: any, i: number) => (
+                <tr key={i} className="border-b border-border/30">
+                  <td className="py-1 pr-3 font-mono">{r.database_name}</td>
+                  <td className="py-1 pr-3 font-semibold">{r.role}</td>
+                  <td className="py-1 pr-3"><SyncBadge value={r.state} /></td>
+                  <td className="py-1 pr-3 text-muted-foreground">{r.safety}</td>
+                  <td className="py-1 pr-3 font-mono text-xs">{r.partner?.split('TCP://')[1]?.split(':')[0] ?? r.partner ?? '—'}</td>
+                  <td className="py-1 text-muted-foreground">{r.witness ?? 'None'} {r.witness_state ? `(${r.witness_state})` : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-[10px] text-warning mt-2">⚠ Database Mirroring is deprecated since SQL Server 2012. Consider migrating to Always On AG.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface MssqlDetailPanelProps {
   metrics: Record<string, any>
   name: string
@@ -150,6 +296,9 @@ export function MssqlDetailPanel({ metrics: m, name }: MssqlDetailPanelProps) {
           </div>
         </div>
       </div>
+
+      {/* ── HA / Replication State ───────────────────────────────── */}
+      <HaStateCard ha={m.ha_state} />
 
       {/* ── Disk / Volume Mounts ─────────────────────────────────── */}
       {(m.disk_mounts ?? []).length > 0 && (

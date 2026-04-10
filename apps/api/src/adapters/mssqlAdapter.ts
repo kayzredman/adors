@@ -30,7 +30,7 @@ export class MssqlAdapter implements DbAdapter {
     })
 
     try {
-      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts] = await Promise.all([
+      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState] = await Promise.all([
         this.#queryVersion(pool),
         this.#queryMemory(pool),
         this.#querySessions(pool),
@@ -39,6 +39,7 @@ export class MssqlAdapter implements DbAdapter {
         this.#queryCpuIo(pool),
         this.#queryBackups(pool).catch(() => []),
         this.#queryDiskMounts(pool).catch(() => []),
+        this.#queryHaState(pool).catch(() => ({ type: 'none', details: [] })),
       ])
 
       // Return flat keys matching mock adapter shape (MssqlDetailPanel reads these directly)
@@ -83,6 +84,8 @@ export class MssqlAdapter implements DbAdapter {
         backup_history:            backups,
         // Disk / volume utilization
         disk_mounts:               diskMounts,
+        // HA / Replication state
+        ha_state:                  haState,
 
         // Legacy nested shape kept for backwards compatibility
         connections: {
@@ -273,6 +276,156 @@ export class MssqlAdapter implements DbAdapter {
       size_gb:      Number(row.size_gb ?? 0),
       destination:  row.destination ?? '',
     }))
+  }
+
+  async #queryHaState(pool: any) {
+    // ── 1. Always On Availability Groups (2012+) ──────────────────────────────
+    try {
+      const agResult = await pool.request().query(`
+        SELECT
+          ag.name                                  AS ag_name,
+          ar.role_desc                             AS local_role,
+          ar.operational_state_desc                AS op_state,
+          ar.connected_state_desc                  AS connected,
+          ar.synchronization_health_desc           AS sync_health,
+          ar.recovery_health_desc                  AS recovery_health,
+          ars.last_redone_lsn,
+          ars.last_received_lsn,
+          ars.log_send_queue_size                  AS log_send_queue_kb,
+          ars.redo_queue_size                      AS redo_queue_kb,
+          ars.is_local,
+          ar2.replica_server_name                  AS partner
+        FROM sys.dm_hadr_availability_replica_states ar
+        JOIN sys.availability_groups ag
+          ON ar.group_id = ag.group_id
+        JOIN sys.availability_replicas ar2
+          ON ar.replica_id = ar2.replica_id
+        LEFT JOIN sys.dm_hadr_database_replica_states ars
+          ON ars.replica_id = ar.replica_id
+        WHERE ar.is_local = 1
+      `)
+      if (agResult.recordset.length > 0) {
+        const row = agResult.recordset[0]
+        return {
+          type: 'alwayson' as const,
+          ag_name:      row.ag_name,
+          local_role:   row.local_role,       // PRIMARY / SECONDARY
+          op_state:     row.op_state,         // ONLINE / OFFLINE etc.
+          connected:    row.connected,
+          sync_health:  row.sync_health,      // HEALTHY / PARTIALLY_HEALTHY / NOT_HEALTHY
+          recovery_health: row.recovery_health,
+          log_send_queue_kb: Number(row.log_send_queue_kb ?? 0),
+          redo_queue_kb:     Number(row.redo_queue_kb     ?? 0),
+          details: agResult.recordset.map((r: any) => ({
+            partner:           r.partner,
+            local_role:        r.local_role,
+            op_state:          r.op_state,
+            connected:         r.connected,
+            sync_health:       r.sync_health,
+            log_send_queue_kb: Number(r.log_send_queue_kb ?? 0),
+            redo_queue_kb:     Number(r.redo_queue_kb     ?? 0),
+          })),
+        }
+      }
+    } catch { /* AG DMV not available — Standard Edition or older */ }
+
+    // ── 2. Log Shipping (2000+) ───────────────────────────────────────────────
+    try {
+      const lsResult = await pool.request().query(`
+        SELECT
+          p.primary_database,
+          s.secondary_server,
+          s.secondary_database,
+          m.last_backup_date,
+          m.last_backup_file,
+          m.backup_threshold,
+          m.last_restored_date,
+          m.restore_threshold,
+          m.status
+        FROM msdb.dbo.log_shipping_monitor_primary   m
+        JOIN msdb.dbo.log_shipping_primary_databases p ON m.primary_id = p.primary_id
+        LEFT JOIN msdb.dbo.log_shipping_primary_secondaries s ON p.primary_id = s.primary_id
+      `)
+      if (lsResult.recordset.length > 0) {
+        return {
+          type: 'logshipping' as const,
+          local_role: 'PRIMARY',
+          details: lsResult.recordset.map((r: any) => ({
+            primary_database:     r.primary_database,
+            secondary_server:     r.secondary_server,
+            secondary_database:   r.secondary_database,
+            last_backup_date:     r.last_backup_date  ? new Date(r.last_backup_date).toISOString()  : null,
+            last_restored_date:   r.last_restored_date ? new Date(r.last_restored_date).toISOString() : null,
+            backup_threshold_min:  Number(r.backup_threshold  ?? 0),
+            restore_threshold_min: Number(r.restore_threshold ?? 0),
+            status:               Number(r.status ?? 0),  // 1=OK, 2=Warning, 3=Critical
+          })),
+        }
+      }
+      // Try secondary side
+      const lsSecResult = await pool.request().query(`
+        SELECT
+          m.secondary_server,
+          m.secondary_database,
+          m.primary_server,
+          m.primary_database,
+          m.last_restored_date,
+          m.restore_threshold,
+          m.status
+        FROM msdb.dbo.log_shipping_monitor_secondary m
+      `)
+      if (lsSecResult.recordset.length > 0) {
+        return {
+          type: 'logshipping' as const,
+          local_role: 'SECONDARY',
+          details: lsSecResult.recordset.map((r: any) => ({
+            primary_database:     r.primary_database,
+            secondary_server:     r.secondary_server,
+            secondary_database:   r.secondary_database,
+            last_backup_date:     null,
+            last_restored_date:   r.last_restored_date ? new Date(r.last_restored_date).toISOString() : null,
+            backup_threshold_min:  0,
+            restore_threshold_min: Number(r.restore_threshold ?? 0),
+            status:               Number(r.status ?? 0),
+          })),
+        }
+      }
+    } catch { /* msdb not accessible or tables missing */ }
+
+    // ── 3. Database Mirroring (2005–2012, deprecated) ─────────────────────────
+    try {
+      const mirResult = await pool.request().query(`
+        SELECT
+          DB_NAME(database_id)                  AS database_name,
+          mirroring_state_desc                  AS state,
+          mirroring_role_desc                   AS role,
+          mirroring_safety_level_desc           AS safety,
+          mirroring_partner_name                AS partner,
+          mirroring_witness_name                AS witness,
+          mirroring_witness_state_desc          AS witness_state
+        FROM sys.database_mirroring
+        WHERE mirroring_state IS NOT NULL
+      `)
+      if (mirResult.recordset.length > 0) {
+        const row = mirResult.recordset[0]
+        return {
+          type: 'mirroring' as const,
+          local_role: row.role,
+          sync_health: row.state,
+          details: mirResult.recordset.map((r: any) => ({
+            database_name: r.database_name,
+            state:         r.state,        // SYNCHRONIZED / SYNCHRONIZING / SUSPENDED / DISCONNECTED
+            role:          r.role,         // PRINCIPAL / MIRROR
+            safety:        r.safety,       // FULL (sync) / OFF (async)
+            partner:       r.partner,
+            witness:       r.witness,
+            witness_state: r.witness_state,
+          })),
+        }
+      }
+    } catch { /* sys.database_mirroring not available */ }
+
+    return { type: 'none' as const, details: [] }
   }
 
   async #queryDiskMounts(pool: any) {
