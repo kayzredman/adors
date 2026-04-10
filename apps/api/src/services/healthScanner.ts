@@ -278,6 +278,7 @@ async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
     database: conn.service_name ?? conn.database_name ?? '',
     username: creds.username,
     password: creds.password,
+    options:  creds.oracle_privilege ? { privilege: creds.oracle_privilege } : undefined,
   }
 
   const adapter = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')

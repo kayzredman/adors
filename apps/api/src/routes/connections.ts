@@ -19,12 +19,13 @@ const router = Router()
 
 // ─── POST /api/connections/test — test credentials before saving ─────────────
 const testSchema = z.object({
-  db_type:       z.enum(['oracle', 'mssql', 'mariadb']),
-  host:          z.string().min(1),
-  port:          z.number().int().min(1).max(65535),
-  database_name: z.string().optional(),
-  username:      z.string().min(1),
-  password:      z.string().min(1),
+  db_type:          z.enum(['oracle', 'mssql', 'mariadb']),
+  host:             z.string().min(1),
+  port:             z.number().int().min(1).max(65535),
+  database_name:    z.string().optional(),
+  username:         z.string().min(1),
+  password:         z.string().min(1),
+  oracle_privilege: z.enum(['SYSDBA', 'SYSOPER']).optional(),
 })
 
 router.post('/test', requireAuth, async (req, res) => {
@@ -34,7 +35,7 @@ router.post('/test', requireAuth, async (req, res) => {
     return
   }
 
-  const { db_type, host, port, database_name, username, password } = parsed.data
+  const { db_type, host, port, database_name, username, password, oracle_privilege } = parsed.data
   try {
     const adapter = await getAdapter(db_type)
     const result  = await adapter.testConnection({
@@ -43,6 +44,7 @@ router.post('/test', requireAuth, async (req, res) => {
       database: database_name ?? '',
       username,
       password,
+      options: oracle_privilege ? { privilege: oracle_privilege } : undefined,
     })
     res.json({ data: result })
   } catch (err: any) {
@@ -84,15 +86,16 @@ router.get('/:id', requireAuth, async (req, res) => {
 
 // ─── POST /api/connections ───────────────────────────────────────────────────
 const createSchema = z.object({
-  name:          z.string().min(1).max(100),
-  db_type:       z.enum(['oracle', 'mssql', 'mariadb']),
-  environment:   z.enum(['production', 'uat']),
-  host:          z.string().min(1),
-  port:          z.number().int().min(1).max(65535),
-  database_name: z.string().optional(),
-  agent_name:    z.string().min(1),
-  username:      z.string().optional(),
-  password:      z.string().optional(),
+  name:             z.string().min(1).max(100),
+  db_type:          z.enum(['oracle', 'mssql', 'mariadb']),
+  environment:      z.enum(['production', 'uat']),
+  host:             z.string().min(1),
+  port:             z.number().int().min(1).max(65535),
+  database_name:    z.string().optional(),
+  agent_name:       z.string().min(1),
+  username:         z.string().optional(),
+  password:         z.string().optional(),
+  oracle_privilege: z.enum(['SYSDBA', 'SYSOPER']).optional(),
 })
 
 router.post('/', requireAuth, requireDBA, async (req, res) => {
@@ -160,14 +163,15 @@ router.get('/:id/snapshots/latest', requireAuth, async (req, res) => {
 
 // ─── PATCH /api/connections/:id ──────────────────────────────────────────────
 const updateSchema = z.object({
-  name:          z.string().min(1).max(100).optional(),
-  environment:   z.enum(['production', 'uat']).optional(),
-  host:          z.string().min(1).optional(),
-  port:          z.number().int().min(1).max(65535).optional(),
-  database_name: z.string().optional(),
-  agent_name:    z.string().min(1).optional(),
-  username:      z.string().optional(),
-  password:      z.string().optional(),
+  name:             z.string().min(1).max(100).optional(),
+  environment:      z.enum(['production', 'uat']).optional(),
+  host:             z.string().min(1).optional(),
+  port:             z.number().int().min(1).max(65535).optional(),
+  database_name:    z.string().optional(),
+  agent_name:       z.string().min(1).optional(),
+  username:         z.string().optional(),
+  password:         z.string().optional(),
+  oracle_privilege: z.enum(['SYSDBA', 'SYSOPER']).nullable().optional(),
 })
 
 router.patch('/:id', requireAuth, requireDBA, async (req, res) => {

@@ -4,7 +4,7 @@ import { encrypt, decrypt } from '../lib/crypto.js'
 import type { DbConnection, DbCredentials } from '@adors/shared'
 
 // Columns never sent to the browser
-const SAFE_SELECT = 'id,name,db_type,environment,host,port,database_name,agent_name,prod_pair_id,status,last_checked_at,created_at,credentials_enc'
+const SAFE_SELECT = 'id,name,db_type,environment,host,port,database_name,agent_name,prod_pair_id,status,oracle_privilege,last_checked_at,created_at,credentials_enc'
 
 /** Strip raw crypto columns and compute has_credentials flag */
 function toPublic(row: any): DbConnection {
@@ -40,10 +40,10 @@ export async function getConnectionById(id: string): Promise<DbConnection | null
  */
 export async function getConnectionCredentials(
   id: string,
-): Promise<{ username: string; password: string } | null> {
+): Promise<{ username: string; password: string; oracle_privilege?: string } | null> {
   const { data, error } = await supabase
     .from('connections')
-    .select('credentials_enc,credentials_iv,credentials_tag')
+    .select('credentials_enc,credentials_iv,credentials_tag,oracle_privilege')
     .eq('id', id)
     .single()
 
@@ -55,22 +55,24 @@ export async function getConnectionCredentials(
       iv:  data.credentials_iv,
       tag: data.credentials_tag,
     })
-    return JSON.parse(plain) as { username: string; password: string }
+    const creds = JSON.parse(plain) as { username: string; password: string }
+    return { ...creds, oracle_privilege: data.oracle_privilege ?? undefined }
   } catch {
     return null
   }
 }
 
 export async function createConnection(payload: {
-  name:          string
-  db_type:       DbConnection['db_type']
-  environment:   DbConnection['environment']
-  host:          string
-  port:          number
+  name:           string
+  db_type:        DbConnection['db_type']
+  environment:    DbConnection['environment']
+  host:           string
+  port:           number
   database_name?: string
-  agent_name:    string
-  username?:     string
-  password?:     string
+  agent_name:     string
+  username?:      string
+  password?:      string
+  oracle_privilege?: string
 }): Promise<DbConnection> {
   const { username, password, ...rest } = payload
 
@@ -107,14 +109,15 @@ export async function updateConnectionStatus(
 export async function updateConnection(
   id: string,
   payload: Partial<{
-    name:          string
-    environment:   DbConnection['environment']
-    host:          string
-    port:          number
-    database_name: string
-    agent_name:    string
-    username:      string
-    password:      string
+    name:             string
+    environment:      DbConnection['environment']
+    host:             string
+    port:             number
+    database_name:    string
+    agent_name:       string
+    username:         string
+    password:         string
+    oracle_privilege: string
   }>,
 ): Promise<DbConnection> {
   const { username, password, ...rest } = payload

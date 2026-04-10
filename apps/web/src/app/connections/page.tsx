@@ -18,6 +18,7 @@ type Connection = {
   database_name?: string
   agent_name: string
   has_credentials: boolean
+  oracle_privilege?: 'SYSDBA' | 'SYSOPER'
   status: string
   health?: { score: number; status: string }
 }
@@ -340,15 +341,16 @@ function DeleteConfirm({ connection, onClose, onDeleted }: {
 // ─── Add / Edit Connection Panel ─────────────────────────────────────────────
 
 type FormState = {
-  name:          string
-  db_type:       'oracle' | 'mssql' | 'mariadb'
-  environment:   'production' | 'uat'
-  host:          string
-  port:          number
-  database_name: string
-  agent_name:    string
-  username:      string
-  password:      string
+  name:             string
+  db_type:          'oracle' | 'mssql' | 'mariadb'
+  environment:      'production' | 'uat'
+  host:             string
+  port:             number
+  database_name:    string
+  agent_name:       string
+  username:         string
+  password:         string
+  oracle_privilege: '' | 'SYSDBA' | 'SYSOPER'
 }
 
 function ConnectionPanel({ mode, connection, onClose, onSaved }: {
@@ -358,15 +360,16 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
   onSaved:     () => void
 }) {
   const [form, setForm] = useState<FormState>({
-    name:          connection?.name          ?? '',
-    db_type:       connection?.db_type       ?? 'oracle',
-    environment:   connection?.environment   ?? 'production',
-    host:          connection?.host          ?? '',
-    port:          connection?.port          ?? 1521,
-    database_name: connection?.database_name ?? '',
-    agent_name:    connection?.agent_name    ?? '',
-    username:      '',
-    password:      '',
+    name:             connection?.name          ?? '',
+    db_type:          connection?.db_type       ?? 'oracle',
+    environment:      connection?.environment   ?? 'production',
+    host:             connection?.host          ?? '',
+    port:             connection?.port          ?? 1521,
+    database_name:    connection?.database_name ?? '',
+    agent_name:       connection?.agent_name    ?? '',
+    username:         '',
+    password:         '',
+    oracle_privilege: (connection?.oracle_privilege ?? '') as '' | 'SYSDBA' | 'SYSOPER',
   })
   const [saving, setSaving]         = useState(false)
   const [error,  setError]          = useState('')
@@ -392,12 +395,13 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
     setTestResult(null)
     try {
       const result = await api.connections.test({
-        db_type:       form.db_type,
-        host:          form.host,
-        port:          form.port,
-        database_name: form.database_name || undefined,
-        username:      form.username,
-        password:      form.password,
+        db_type:          form.db_type,
+        host:             form.host,
+        port:             form.port,
+        database_name:    form.database_name || undefined,
+        username:         form.username,
+        password:         form.password,
+        oracle_privilege: (form.db_type === 'oracle' && form.oracle_privilege) ? form.oracle_privilege : undefined,
       } as unknown as Record<string, unknown>)
       setTestResult(result.data ?? { ok: false, latency_ms: 0 })
     } catch {
@@ -418,27 +422,29 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
     try {
       if (mode === 'create') {
         await api.connections.create({
-          name:          form.name,
-          db_type:       form.db_type,
-          environment:   form.environment,
-          host:          form.host,
-          port:          Number(form.port),
-          database_name: form.database_name || undefined,
-          agent_name:    form.agent_name,
-          username:      form.username || undefined,
-          password:      form.password || undefined,
+          name:             form.name,
+          db_type:          form.db_type,
+          environment:      form.environment,
+          host:             form.host,
+          port:             Number(form.port),
+          database_name:    form.database_name || undefined,
+          agent_name:       form.agent_name,
+          username:         form.username || undefined,
+          password:         form.password || undefined,
+          oracle_privilege: (form.db_type === 'oracle' && form.oracle_privilege) ? form.oracle_privilege : undefined,
         })
       } else {
         await api.connections.update(connection!.id, {
-          name:          form.name,
-          environment:   form.environment,
-          host:          form.host,
-          port:          Number(form.port),
-          database_name: form.database_name || undefined,
-          agent_name:    form.agent_name,
+          name:             form.name,
+          environment:      form.environment,
+          host:             form.host,
+          port:             Number(form.port),
+          database_name:    form.database_name || undefined,
+          agent_name:       form.agent_name,
+          oracle_privilege: form.db_type === 'oracle' ? (form.oracle_privilege || null) : undefined,
           // Only send password update if both fields are filled
-          username:      (form.username && form.password) ? form.username : undefined,
-          password:      (form.username && form.password) ? form.password : undefined,
+          username:         (form.username && form.password) ? form.username : undefined,
+          password:         (form.username && form.password) ? form.password : undefined,
         })
       }
       onSaved()
@@ -508,6 +514,16 @@ function ConnectionPanel({ mode, connection, onClose, onSaved }: {
           <Field label={form.db_type === 'oracle' ? 'Service Name / SID' : 'Default Database'}>
             <input className={inputCls} placeholder={DB_PLACEHOLDER[form.db_type]} value={form.database_name} onChange={e => set('database_name', e.target.value)} />
           </Field>
+
+          {form.db_type === 'oracle' && (
+            <Field label="Oracle Connection Privilege" hint="Required when connecting as SYS. Leave as Default for normal accounts.">
+              <select className={inputCls} value={form.oracle_privilege} onChange={e => set('oracle_privilege', e.target.value)}>
+                <option value="">Default (normal user)</option>
+                <option value="SYSDBA">SYSDBA</option>
+                <option value="SYSOPER">SYSOPER</option>
+              </select>
+            </Field>
+          )}
 
           <Field label="Agent Name" required hint="Which bot monitors this connection (OraBot / MsBot / MarBot)">
             <input className={inputCls} placeholder="e.g. OraBot" value={form.agent_name} onChange={e => set('agent_name', e.target.value)} />

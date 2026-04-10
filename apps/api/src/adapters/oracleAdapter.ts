@@ -14,19 +14,26 @@ import type { DbAdapter, DbCredentials } from './types.js'
 export class OracleAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
     // Lazy import — only installed if Oracle features are enabled
-    const oracledb = await import('oracledb').catch(() => {
+    // CJS interop: dynamic ESM import wraps CJS module in .default
+    const oracledbMod = await import('oracledb').catch(() => {
       throw new Error('oracledb package not installed. Run: pnpm add oracledb')
     })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const oracledb: typeof import('oracledb') = (oracledbMod as any).default ?? oracledbMod
 
-    // Prefer thin client (no Instant Client libs needed) unless explicitly disabled
-    if (process.env.ORACLE_THIN_CLIENT !== 'false') {
-      oracledb.initOracleClient()  // noop in thin mode
+    // oracledb v6+ defaults to thin mode (no Instant Client required).
+    // Only call initOracleClient() when thick mode is explicitly requested.
+    if (process.env.ORACLE_THICK_CLIENT === 'true') {
+      const libDir = process.env.ORACLE_LIB_DIR
+      oracledb.initOracleClient(libDir ? { libDir } : undefined)
     }
 
     const conn = await oracledb.getConnection({
-      user:             creds.username,
-      password:         creds.password,
-      connectString:    `${creds.host}:${creds.port}/${creds.database}`,
+      user:          creds.username,
+      password:      creds.password,
+      connectString: `${creds.host}:${creds.port}/${creds.database}`,
+      ...(creds.options?.['privilege'] === 'SYSDBA'  ? { privilege: oracledb.SYSDBA  } : {}),
+      ...(creds.options?.['privilege'] === 'SYSOPER' ? { privilege: oracledb.SYSOPER } : {}),
     })
 
     try {
@@ -98,12 +105,17 @@ export class OracleAdapter implements DbAdapter {
   }
 
   async testConnection(creds: DbCredentials): Promise<{ ok: boolean; latency_ms: number }> {
-    const oracledb = await import('oracledb')
+    const oracledbMod = await import('oracledb')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const oracledb: typeof import('oracledb') = (oracledbMod as any).default ?? oracledbMod
     const start = Date.now()
     try {
       const conn = await oracledb.getConnection({
-        user: creds.username, password: creds.password,
+        user:          creds.username,
+        password:      creds.password,
         connectString: `${creds.host}:${creds.port}/${creds.database}`,
+        ...(creds.options?.['privilege'] === 'SYSDBA'  ? { privilege: oracledb.SYSDBA  } : {}),
+        ...(creds.options?.['privilege'] === 'SYSOPER' ? { privilege: oracledb.SYSOPER } : {}),
       })
       await conn.execute('SELECT 1 FROM DUAL')
       await conn.close()

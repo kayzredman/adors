@@ -15,6 +15,7 @@ export interface DbConnection {
   service_name?: string      // Oracle: service name or SID
   database_name?: string     // MSSQL / MariaDB default database
   has_credentials: boolean   // true = encrypted creds stored server-side
+  oracle_privilege?: 'SYSDBA' | 'SYSOPER'  // Oracle only: connect as privileged role
   status: ConnectionStatus
   agent_name: string
   prod_pair_id?: string
