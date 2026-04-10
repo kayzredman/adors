@@ -386,17 +386,26 @@ export async function triggerManualScan(conn: DbConnection): Promise<HealthSnaps
   return scanConnection(conn)
 }
 
+// Maximum concurrent DB scans per run. Keeps the Supabase connection pool
+// free for live user traffic even when the fleet is large.
+const SCAN_BATCH_SIZE = 3
+
 export async function scanAllConnections(): Promise<void> {
   const { data: connections, error } = await supabase
     .from('connections')
     .select('*')
     .eq('status', 'active')
 
-  if (error || !connections) return
+  if (error || !connections || connections.length === 0) return
 
-  await Promise.allSettled(
-    connections.map((conn) => scanConnection(conn as DbConnection)),
-  )
+  // Process in fixed-size batches — never more than SCAN_BATCH_SIZE live
+  // adapter calls + Supabase writes happening simultaneously.
+  for (let i = 0; i < connections.length; i += SCAN_BATCH_SIZE) {
+    const batch = connections.slice(i, i + SCAN_BATCH_SIZE)
+    await Promise.allSettled(
+      batch.map((conn) => scanConnection(conn as DbConnection)),
+    )
+  }
 }
 
 // ─── Alert Evaluation ────────────────────────────────────────────────────────

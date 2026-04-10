@@ -18,7 +18,7 @@ import sandboxRouter from './routes/sandbox.js'
 import meRouter from './routes/me.js'
 import analyticsRouter from './routes/analytics.js'
 import agentsRouter from './routes/agents.js'
-import { startHealthScanScheduler, createHealthScanWorker } from './workers/healthScanWorker.js'
+import { startHealthScanScheduler, createHealthScanWorker, closeWorker, releaseSchedulerLock } from './workers/healthScanWorker.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 4000
@@ -55,20 +55,53 @@ app.use((_req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function bootstrap() {
+  let workerCreated = false
+
   // Start BullMQ scheduler only when Redis is available
-  if (process.env.NODE_ENV !== 'production' && process.env.REDIS_URL) {
+  if (process.env.REDIS_URL) {
     try {
       await startHealthScanScheduler()
       createHealthScanWorker()
+      workerCreated = true
     } catch (err: any) {
       console.warn('[workers] BullMQ init failed (Redis unavailable?) — health scan scheduler disabled:', err.message)
     }
-  } else if (!process.env.REDIS_URL) {
+  } else {
     console.warn('[workers] REDIS_URL not set — health scan scheduler disabled')
   }
 
-  app.listen(PORT, () => {
+  // ─── Graceful shutdown ─────────────────────────────────────────────────────
+  // Called on SIGTERM (tsx hot-reload, docker stop) and SIGINT (Ctrl+C).
+  // Releasing the scheduler lock lets a restarted instance win election
+  // immediately instead of waiting for the 6-minute TTL to expire.
+  const shutdown = async (signal: string) => {
+    console.log(`[adors-api] ${signal} received — shutting down gracefully`)
+    if (workerCreated) {
+      await Promise.allSettled([releaseSchedulerLock(), closeWorker()])
+    }
+    process.exit(0)
+  }
+  process.once('SIGTERM', () => shutdown('SIGTERM'))
+  process.once('SIGINT',  () => shutdown('SIGINT'))
+
+  // ─── Listen ───────────────────────────────────────────────────────────────
+  const server = app.listen(PORT)
+
+  server.on('listening', () => {
     console.log(`[adors-api] Running on http://localhost:${PORT}`)
+  })
+
+  // Fail fast if the port is already occupied — prevents a silent second
+  // instance from running workers without an HTTP server.
+  server.on('error', async (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[adors-api] Port ${PORT} is already in use. Stop the existing instance first.`)
+      if (workerCreated) {
+        await Promise.allSettled([releaseSchedulerLock(), closeWorker()])
+      }
+      process.exit(1)
+    }
+    throw err
   })
 }
 
