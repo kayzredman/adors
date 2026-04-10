@@ -45,7 +45,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex flex-col w-64 h-full bg-card border-r border-border shrink-0">
+    <aside className="dark flex flex-col w-64 h-full bg-card border-r border-border shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-border">
         <AdorsLogoLocal />
@@ -91,7 +91,7 @@ export function Sidebar() {
           className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
         >
           {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-          {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          {theme === 'dark' ? 'Light content' : 'Dark content'}
         </button>
         <button
           onClick={handleSignOut}

@@ -4,25 +4,25 @@
 
 @layer base {
   :root {
-    /* Light theme */
-    --background:    0 0% 98%;
+    /* Light theme — blue-grey tinted, cards lift off background */
+    --background:    220 18% 96%;   /* subtle blue-grey — no glare */
     --foreground:    222 47% 11%;
-    --card:          0 0% 100%;
+    --card:          0 0% 100%;     /* pure white cards stand out from bg */
     --card-foreground: 222 47% 11%;
     --popover:       0 0% 100%;
     --popover-foreground: 222 47% 11%;
     --primary:       211 100% 40%;
     --primary-foreground: 0 0% 100%;
-    --secondary:     214 32% 91%;
+    --secondary:     220 15% 92%;   /* tinted so it's visible on white */
     --secondary-foreground: 222 47% 11%;
-    --muted:         214 32% 91%;
-    --muted-foreground: 215 20% 50%;
-    --accent:        214 32% 91%;
+    --muted:         220 15% 92%;   /* progress bar bg, table zebra etc. */
+    --muted-foreground: 215 20% 42%; /* darker — 50% was too washed on white */
+    --accent:        220 15% 92%;
     --accent-foreground: 222 47% 11%;
     --destructive:   0 84% 60%;
     --destructive-foreground: 0 0% 100%;
-    --border:        214 32% 88%;
-    --input:         214 32% 88%;
+    --border:        214 20% 85%;   /* stronger so cards read without shadows */
+    --input:         214 20% 85%;
     --ring:          211 100% 40%;
     --radius:        0.5rem;
 
