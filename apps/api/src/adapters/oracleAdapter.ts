@@ -178,7 +178,7 @@ export class OracleAdapter implements DbAdapter {
 
     return {
       current, active, inactive, blocked,
-      chart: [{ time: '00m', value: current }],  // single point; scanner accumulates over time
+      chart: [{ t: new Date().toISOString(), v: current }],
     }
   }
 
@@ -199,10 +199,10 @@ export class OracleAdapter implements DbAdapter {
       [], { outFormat: 4002 },
     )
     const breakdown: Record<string, number> = {}
-    const chart: { time: string; value: number }[] = []
+    const chart: { t: string; v: number }[] = []
     for (const r of (rows as any[])) {
       breakdown[r.EVENT] = Number(r.TIME_WAITED)
-      chart.push({ time: r.EVENT.substring(0, 8), value: Number(r.TIME_WAITED) })
+      chart.push({ t: new Date().toISOString(), v: Number(r.TIME_WAITED) })
     }
     return { breakdown, chart }
   }
@@ -240,7 +240,7 @@ export class OracleAdapter implements DbAdapter {
       data:     toTs(find('USER'), 'data'),
       temp:     toTs(find('TEMP'), 'temp'),
       undo:     toTs(find('UNDO'), 'undo'),
-      io_chart: [{ time: '00m', read: 0, write: 0 }],
+      io_chart: [{ t: new Date().toISOString(), v: 0 }],
     }
   }
 
@@ -259,8 +259,8 @@ export class OracleAdapter implements DbAdapter {
 
     return {
       current_group: current?.['GROUP#'] ?? null,
-      used_pct:      0,  // V$LOG doesn't expose fill — use V$LOGFILE + events
-      fill_chart:    [{ time: '00m', value: 0 }],
+      used_pct:      0,
+      fill_chart:    [{ t: new Date().toISOString(), v: 0 }],
       log_counts:    logCounts,
     }
   }
@@ -277,15 +277,16 @@ export class OracleAdapter implements DbAdapter {
       STATS, { outFormat: 4002 },
     )
 
+    const now = new Date().toISOString()
     const get = (name: string) => Number((rows as any[]).find((r: any) => r.NAME === name)?.VALUE ?? 0)
     return {
-      execution_rate:       [{ time: '00m', value: get('execute count') }],
-      parse_rate:           [{ time: '00m', value: get('parse count (total)') }],
-      open_cursors:         [{ time: '00m', value: get('opened cursors current') }],
-      commit_rate:          [{ time: '00m', value: get('user commits') }],
-      db_block_rate_chart:  [{ time: '00m', value: get('db block gets') }],
-      logical_reads_chart:  [{ time: '00m', value: get('logical reads') }],
-      redo_generated_chart: [{ time: '00m', value: get('redo size') / 1024 }],
+      execution_rate:       [{ t: now, v: get('execute count') }],
+      parse_rate:           [{ t: now, v: get('parse count (total)') }],
+      open_cursors:         [{ t: now, v: get('opened cursors current') }],
+      commit_rate:          [{ t: now, v: get('user commits') }],
+      db_block_rate_chart:  [{ t: now, v: get('db block gets') }],
+      logical_reads_chart:  [{ t: now, v: get('logical reads') }],
+      redo_generated_chart: [{ t: now, v: get('redo size') / 1024 }],
       net_in:               Math.round(get('bytes received via SQL*Net from client') / 1024),
       net_out:              Math.round(get('bytes sent via SQL*Net to client') / 1024),
       avg_response_ms:      0,

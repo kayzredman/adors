@@ -134,14 +134,15 @@ export class MssqlAdapter implements DbAdapter {
         SERVERPROPERTY('ProductVersion') AS pv,
         SERVERPROPERTY('Edition') AS ed,
         @@CPU_COUNT AS cpus,
-        (SELECT sqlserver_start_time FROM sys.dm_os_sys_info) AS start_time,
         @@VERSION AS full_ver
     `)
+    const sysInfo = await pool.request().query(`
+      SELECT sqlserver_start_time AS start_time FROM sys.dm_os_sys_info
+    `)
     const row = r.recordset[0] ?? {}
-    const startTime  = row.start_time ? new Date(row.start_time) : null
+    const startTime  = sysInfo.recordset[0]?.start_time ? new Date(sysInfo.recordset[0].start_time) : null
     const uptimeDays = startTime ? Math.floor((Date.now() - startTime.getTime()) / 86400000) : 0
     const fullVer    = String(row.full_ver ?? '')
-    // Extract OS from @@VERSION string (e.g. "on Windows Server 2019")
     const osMatch    = fullVer.match(/on\s+(.+?)\s*(?:\n|$)/i)
     return {
       product_version: String(row.pv ?? 'unknown'),
@@ -177,8 +178,8 @@ export class MssqlAdapter implements DbAdapter {
       target_gb:        Math.round(target_gb * 10) / 10,
       current_gb:       Math.round(current_gb * 10) / 10,
       ple:              Number(ple.recordset[0]?.cntr_value ?? 0),
-      chart:            [{ time: '00m', value: Math.round(current_gb * 10) / 10 }],
-      pressure_hist:    [{ time: '00m', value: Number(row.memory_utilization_percentage ?? 0) }],
+      chart:            [{ t: new Date().toISOString(), v: Math.round(current_gb * 10) / 10 }],
+      pressure_hist:    [{ t: new Date().toISOString(), v: Number(row.memory_utilization_percentage ?? 0) }],
     }
   }
 
@@ -195,7 +196,7 @@ export class MssqlAdapter implements DbAdapter {
     return {
       active:      Number(r.recordset[0]?.active ?? 0),
       max_allowed: Number(cfg.recordset[0]?.value_in_use ?? 32767),
-      chart:       [{ time: '00m', value: Number(r.recordset[0]?.active ?? 0) }],
+      chart:       [{ t: new Date().toISOString(), v: Number(r.recordset[0]?.active ?? 0) }],
     }
   }
 
@@ -233,7 +234,7 @@ export class MssqlAdapter implements DbAdapter {
     `)
     return {
       count: Number(r.recordset[0]?.cnt ?? 0),
-      chart: [{ time: '00m', value: Number(r.recordset[0]?.cnt ?? 0) }],
+      chart: [{ t: new Date().toISOString(), v: Number(r.recordset[0]?.cnt ?? 0) }],
     }
   }
 
@@ -264,12 +265,13 @@ export class MssqlAdapter implements DbAdapter {
       deadlocks:       get('Number of Deadlocks/sec'),
       avg_exec_ms:     0,
       cpu_pct:         0,
-      cpu_chart:       [{ time: '00m', value: 0 }],
+      cpu_chart:       [{ t: new Date().toISOString(), v: 0 }],
       disk_io: {
         read_stall_ms:  Number(ior.read_stall ?? 0),
         write_stall_ms: Number(ior.write_stall ?? 0),
         reads_per_s:    Number(ior.reads ?? 0),
         writes_per_s:   Number(ior.writes ?? 0),
+        io_chart:       [{ t: new Date().toISOString(), v: Number(ior.reads ?? 0) + Number(ior.writes ?? 0) }],
       },
     }
   }
