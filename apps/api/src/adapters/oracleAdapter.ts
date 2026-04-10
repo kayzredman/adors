@@ -253,7 +253,7 @@ export class OracleAdapter implements DbAdapter {
     ]
     const binds = STATS.map((_, i) => `:${i + 1}`)
     const { rows } = await conn.execute(
-      `SELECT name, value FROM v$sysstat WHERE name IN (${binds.map(() => '?').join(',')})`,
+      `SELECT name, value FROM v$sysstat WHERE name IN (${binds.join(',')})`,
       STATS, { outFormat: 4002 },
     )
 
