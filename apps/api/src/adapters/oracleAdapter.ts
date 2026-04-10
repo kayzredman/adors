@@ -217,13 +217,14 @@ export class OracleAdapter implements DbAdapter {
   // ─── Private query helpers ─────────────────────────────────────────────────
 
   async #queryDbProps(conn: any) {
+    // VERSION_FULL only exists on Oracle 18c+; VERSION exists on all versions (11g+)
     const { rows } = await conn.execute(
-      `SELECT version_full, (SYSDATE - startup_time) * 24 AS uptime_h FROM v$instance`,
+      `SELECT version, (SYSDATE - startup_time) * 24 AS uptime_h FROM v$instance`,
       [], { outFormat: 4002 },  // OBJECT format
     )
     const r = (rows as any[])[0] ?? {}
     return {
-      version:     r.VERSION_FULL ?? 'unknown',
+      version:     r.VERSION ?? 'unknown',
       uptime_days: Math.round((r.UPTIME_H ?? 0) / 24),
     }
   }
