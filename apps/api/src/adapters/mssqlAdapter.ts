@@ -133,14 +133,14 @@ export class MssqlAdapter implements DbAdapter {
       SELECT
         SERVERPROPERTY('ProductVersion') AS pv,
         SERVERPROPERTY('Edition') AS ed,
-        @@CPU_COUNT AS cpus,
         @@VERSION AS full_ver
     `)
     const sysInfo = await pool.request().query(`
-      SELECT sqlserver_start_time AS start_time FROM sys.dm_os_sys_info
+      SELECT sqlserver_start_time AS start_time, cpu_count AS cpus FROM sys.dm_os_sys_info
     `)
     const row = r.recordset[0] ?? {}
-    const startTime  = sysInfo.recordset[0]?.start_time ? new Date(sysInfo.recordset[0].start_time) : null
+    const sys = sysInfo.recordset[0] ?? {}
+    const startTime  = sys.start_time ? new Date(sys.start_time) : null
     const uptimeDays = startTime ? Math.floor((Date.now() - startTime.getTime()) / 86400000) : 0
     const fullVer    = String(row.full_ver ?? '')
     const osMatch    = fullVer.match(/on\s+(.+?)\s*(?:\n|$)/i)
@@ -148,7 +148,7 @@ export class MssqlAdapter implements DbAdapter {
       product_version: String(row.pv ?? 'unknown'),
       uptime_days:     uptimeDays,
       os:              osMatch ? osMatch[1].trim() : 'Windows Server',
-      cpus:            Number(row.cpus ?? 0),
+      cpus:            Number(sys.cpus ?? 0),
     }
   }
 
