@@ -1,7 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity } from 'lucide-react'
+import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity, ChevronRight, Wand2, Trash2 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { OracleIcon, MssqlIcon, MariaDbIcon } from '@/components/brand/VendorIcons'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/browser'
@@ -11,10 +13,13 @@ type BotId = 'orabot' | 'msbot' | 'marbot'
 type ToolCallState = {
   name:            string
   connectionName?: string
+  sql?:            string
   status:          'running' | 'done' | 'error'
   rowCount?:       number
   executionMs?:    number
   errorMsg?:       string
+  rows?:           Record<string, unknown>[]
+  columns?:        string[]
 }
 
 type Message = {
@@ -75,6 +80,50 @@ function stripControlTokens(text: string): string {
     .trim()
 }
 
+// ─── Collapsible result table ───────────────────────────────────────────────
+function ResultTable({ columns, rows }: { columns: string[]; rows: Record<string, unknown>[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-1">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronRight className={cn('w-3 h-3 transition-transform duration-150', open && 'rotate-90')} />
+        {open ? 'Hide' : 'Show'} {rows.length} row{rows.length !== 1 ? 's' : ''}
+      </button>
+      {open && (
+        <div className="mt-1 rounded border border-border/50 overflow-x-auto max-h-52 overflow-y-auto">
+          <table className="text-[11px] border-collapse min-w-full">
+            <thead className="sticky top-0 z-10">
+              <tr>
+                {columns.map(c => (
+                  <th key={c} className="px-2 py-1 text-left font-semibold text-muted-foreground bg-muted/80 border-b border-border/50 whitespace-nowrap">
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i} className={cn('border-b border-border/30', i % 2 === 0 ? 'bg-card' : 'bg-muted/20')}>
+                  {columns.map(c => (
+                    <td key={c} className="px-2 py-1 text-foreground/80 whitespace-nowrap max-w-[200px] truncate">
+                      {row[c] == null
+                        ? <span className="text-muted-foreground/40 italic">null</span>
+                        : String(row[c])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Tool call badge ──────────────────────────────────────────────────────────
 const TOOL_ICON: Record<string, React.ElementType> = {
   execute_query:    Search,
@@ -88,7 +137,7 @@ const TOOL_VERB: Record<string, string> = {
   get_analytics:    'Analysing',
 }
 
-function ToolCallBadge({ tc }: { tc: ToolCallState }) {
+function ToolCallBadge({ tc, onRetry }: { tc: ToolCallState; onRetry?: (errorMsg: string) => void }) {
   const Icon  = TOOL_ICON[tc.name] ?? Search
   const verb  = TOOL_VERB[tc.name] ?? tc.name
   const label = tc.connectionName ? `${verb} ${tc.connectionName}` : verb
@@ -104,28 +153,45 @@ function ToolCallBadge({ tc }: { tc: ToolCallState }) {
   }
 
   if (tc.status === 'error') {
+    const isDbError = Boolean(tc.errorMsg && /ORA-\d|SQL Error|\[Microsoft\]|You have an error in your SQL/i.test(tc.errorMsg))
     return (
-      <div className="flex items-center gap-2 text-xs text-destructive/80 py-0.5">
-        <AlertCircle className="w-3 h-3 flex-shrink-0" />
-        <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
-        <span>{label}</span>
-        {tc.errorMsg && <span className="opacity-70">— {tc.errorMsg}</span>}
+      <div className="flex flex-col gap-0.5 py-0.5">
+        <div className="flex items-center gap-2 text-xs text-destructive/80">
+          <AlertCircle className="w-3 h-3 flex-shrink-0" />
+          <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
+          <span>{label}</span>
+          {tc.errorMsg && <span className="opacity-70 truncate max-w-[260px]">— {tc.errorMsg}</span>}
+        </div>
+        {isDbError && onRetry && (
+          <button
+            onClick={() => onRetry(tc.errorMsg!)}
+            className="flex items-center gap-1 text-[11px] text-brand-400 hover:text-brand-300 transition-colors w-fit ml-5"
+          >
+            <Wand2 className="w-3 h-3" />
+            Ask bot to fix this
+          </button>
+        )}
       </div>
     )
   }
 
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground py-0.5">
-      <CheckCircle2 className="w-3 h-3 text-success flex-shrink-0" />
-      <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
-      <span>{label}</span>
-      {tc.rowCount !== undefined && (
-        <span className="text-foreground/50">
-          · {tc.rowCount} {tc.rowCount === 1 ? 'result' : 'results'}
-        </span>
-      )}
-      {tc.executionMs !== undefined && (
-        <span className="opacity-40">· {tc.executionMs}ms</span>
+    <div className="flex flex-col gap-0.5 py-0.5">
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <CheckCircle2 className="w-3 h-3 text-success flex-shrink-0" />
+        <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
+        <span>{label}</span>
+        {tc.rowCount !== undefined && (
+          <span className="text-foreground/50">
+            · {tc.rowCount} {tc.rowCount === 1 ? 'row' : 'rows'}
+          </span>
+        )}
+        {tc.executionMs !== undefined && (
+          <span className="opacity-40">· {tc.executionMs}ms</span>
+        )}
+      </div>
+      {tc.columns && tc.rows && tc.rows.length > 0 && (
+        <ResultTable columns={tc.columns} rows={tc.rows} />
       )}
     </div>
   )
@@ -135,13 +201,33 @@ function ToolCallBadge({ tc }: { tc: ToolCallState }) {
 function MessageContent({ content }: { content: string }) {
   const clean = stripControlTokens(content)
   return (
-    <span className="whitespace-pre-wrap">
-      {clean.split(/(\*\*.*?\*\*|\*[^*\n]+?\*)/g).map((part, i) =>
-        part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong>
-          : part.startsWith('*') ? <em key={i}>{part.slice(1, -1)}</em>
-          : <span key={i}>{part}</span>
-      )}
-    </span>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p:          ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+        ul:         ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+        ol:         ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+        li:         ({ children }) => <li className="leading-snug">{children}</li>,
+        strong:     ({ children }) => <strong className="font-semibold">{children}</strong>,
+        em:         ({ children }) => <em className="italic">{children}</em>,
+        a:          ({ children, href }) => <a href={href} className="text-brand-400 underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+        blockquote: ({ children }) => <blockquote className="border-l-2 border-muted-foreground/40 pl-3 italic text-muted-foreground/80 my-2">{children}</blockquote>,
+        h1:         ({ children }) => <h1 className="text-base font-bold mb-1 mt-2">{children}</h1>,
+        h2:         ({ children }) => <h2 className="text-sm font-semibold mb-1 mt-2">{children}</h2>,
+        h3:         ({ children }) => <h3 className="text-sm font-medium mb-1 mt-1">{children}</h3>,
+        table:      ({ children }) => <div className="overflow-x-auto my-2"><table className="text-xs border-collapse w-full">{children}</table></div>,
+        th:         ({ children }) => <th className="border border-border px-2 py-1 bg-muted font-semibold text-left">{children}</th>,
+        td:         ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
+        pre:        ({ children }) => <pre className="bg-muted/60 rounded-lg px-3 py-2 my-2 overflow-x-auto text-xs font-mono">{children}</pre>,
+        code:       ({ className, children }) => (
+          className
+            ? <code className={className}>{children}</code>
+            : <code className="bg-muted px-1 py-0.5 rounded text-[11px] font-mono">{children}</code>
+        ),
+      }}
+    >
+      {clean}
+    </ReactMarkdown>
   )
 }
 
@@ -152,9 +238,59 @@ function ChatColumn({ botId }: { botId: BotId }) {
   )
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const bottomRef    = useRef<HTMLDivElement>(null)
+  const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+
+  // ── Load last session from Supabase ────────────────────────────────────────
+  useEffect(() => {
+    createClient().auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return
+      const { data } = await createClient()
+        .from('chat_sessions')
+        .select('messages')
+        .eq('user_id', session.user.id)
+        .eq('bot_id', botId)
+        .maybeSingle()
+      if (data?.messages && Array.isArray(data.messages) && (data.messages as unknown[]).length > 0) {
+        setMessages(data.messages as Message[])
+      }
+    })
+  }, [botId])
+
+  // ── Auto-save messages on change (debounced 1 s) ──────────────────────────
+  useEffect(() => {
+    const real = messages.filter(m => !m.id.startsWith('intro-'))
+    if (real.length === 0) return
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(async () => {
+      const { data: { session } } = await createClient().auth.getSession()
+      if (!session) return
+      await createClient()
+        .from('chat_sessions')
+        .upsert(
+          { user_id: session.user.id, bot_id: botId, messages: real, updated_at: new Date().toISOString() },
+          { onConflict: 'user_id,bot_id' },
+        )
+    }, 1000)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [messages, botId])
+
+  async function clearChat() {
+    setMessages(config.intro.map((content, i) => ({ id: `intro-${i}`, role: 'bot', content })))
+    const { data: { session } } = await createClient().auth.getSession()
+    if (!session) return
+    await createClient()
+      .from('chat_sessions')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('bot_id', botId)
+  }
+
+  function retryWithError(errorMsg: string) {
+    setInput(`The last query failed with: "${errorMsg}". Please diagnose the issue and retry with a corrected query.`)
+  }
 
   async function send() {
     const text = input.trim()
@@ -221,10 +357,10 @@ function ChatColumn({ botId }: { botId: BotId }) {
           // ── Tool start ────────────────────────────────────────────────────
           if (pendingEvent === 'tool_start') {
             try {
-              const data = JSON.parse(raw) as { name: string; connectionName?: string }
+              const data = JSON.parse(raw) as { name: string; connectionName?: string; sql?: string }
               setMessages(prev => prev.map(msg => {
                 if (msg.id !== botMsgId) return msg
-                const newTc: ToolCallState = { name: data.name, connectionName: data.connectionName, status: 'running' }
+                const newTc: ToolCallState = { name: data.name, connectionName: data.connectionName, sql: data.sql, status: 'running' }
                 return { ...msg, toolCalls: [...(msg.toolCalls ?? []), newTc] }
               }))
             } catch { /* skip */ }
@@ -238,6 +374,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
               const data = JSON.parse(raw) as {
                 id: string; status: 'done' | 'error'
                 rowCount?: number; executionMs?: number; error?: string
+                rows?: Record<string, unknown>[]; columns?: string[]
               }
               setMessages(prev => prev.map(msg => {
                 if (msg.id !== botMsgId) return msg
@@ -246,7 +383,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
                 const toolCalls = (msg.toolCalls ?? []).map(tc => {
                   if (!matched && tc.status === 'running') {
                     matched = true
-                    return { ...tc, status: data.status, rowCount: data.rowCount, executionMs: data.executionMs, errorMsg: data.error }
+                    return { ...tc, status: data.status, rowCount: data.rowCount, executionMs: data.executionMs, errorMsg: data.error, rows: data.rows, columns: data.columns }
                   }
                   return tc
                 })
@@ -308,8 +445,15 @@ function ChatColumn({ botId }: { botId: BotId }) {
           </div>
           <p className="text-xs text-muted-foreground">{config.dbType} AI Agent</p>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
           <Sparkles className="w-4 h-4" style={{ color: `${config.hex}80` }} />
+          <button
+            onClick={clearChat}
+            title="New chat"
+            className="p-1 text-muted-foreground hover:text-destructive transition-colors rounded"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
         </div>
       </div>
 
@@ -323,7 +467,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
               {/* Tool call chain — shown as subtle thought steps above the reply */}
               {msg.toolCalls && msg.toolCalls.length > 0 && (
                 <div className="pl-3 border-l-2 border-brand-500/25 space-y-0.5 pb-1">
-                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} />)}
+                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} onRetry={retryWithError} />)}
                 </div>
               )}
 

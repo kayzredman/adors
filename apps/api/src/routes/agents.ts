@@ -267,14 +267,27 @@ router.post('/chat', requireAuth, async (req, res) => {
           const id         = body.slice(0, sepIdx)
           const resultJson = body.slice(sepIdx + 1)
           try {
-            const result = JSON.parse(resultJson) as Record<string, unknown>
+            const result  = JSON.parse(resultJson) as Record<string, unknown>
             const isError = Boolean(result['error'])
+            const rawRows = Array.isArray(result['rows']) ? result['rows'] as Record<string, unknown>[] : undefined
+            const cols    = Array.isArray(result['columns']) ? result['columns'] as string[] : undefined
+            // Send up to 10 rows to the UI; truncate long cell values
+            const rows    = rawRows?.slice(0, 10).map(row => {
+              const trimmed: Record<string, unknown> = {}
+              for (const c of (cols ?? Object.keys(row))) {
+                const v = row[c]
+                trimmed[c] = typeof v === 'string' && v.length > 100 ? v.slice(0, 100) + '…' : v
+              }
+              return trimmed
+            })
             res.write(`event: tool_result\ndata: ${JSON.stringify({
               id,
               status:      isError ? 'error' : 'done',
               rowCount:    result['rowCount'],
               executionMs: result['executionMs'],
               error:       result['error'] ?? undefined,
+              rows,
+              columns:     cols,
             })}\n\n`)
           } catch {
             res.write(`event: tool_result\ndata: ${JSON.stringify({ id, status: 'error', error: 'Parse error' })}\n\n`)
