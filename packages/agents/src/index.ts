@@ -184,10 +184,85 @@ function buildContextBlock(ctx: AgentContext): string {
 
 // ─── Main: streaming chat ─────────────────────────────────────────────────────
 
+// ─── Tool definitions (OpenAI function-calling spec) ─────────────────────────
+
+export interface ToolCallRequest {
+  id:        string
+  name:      string
+  arguments: Record<string, unknown>
+}
+
+export interface ToolCallResult {
+  toolCallId: string
+  result:     Record<string, unknown>
+}
+
+const AGENT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'get_fleet_health',
+      description:
+        'Returns the current live health summary (health score, status, active alerts, blocked sessions, key metrics) ' +
+        'for all connections this bot monitors. Call this when asked for an overview of the fleet.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'execute_query',
+      description:
+        'Runs a read-only SQL query on a specific database connection. ' +
+        'Use for detailed diagnostics: backup trends, top SQL, wait events, tablespace growth, ' +
+        'replication status, blocking chains, session details — anything beyond the live metrics snapshot. ' +
+        'Always SELECT-only. Returns columns, rows (max 500), and execution time.',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectionName: {
+            type: 'string',
+            description: 'Exact connection name from the fleet list (e.g. PROD_ORA_01)',
+          },
+          sql: {
+            type: 'string',
+            description: 'Read-only SQL query. SELECT / WITH / EXPLAIN only.',
+          },
+        },
+        required: ['connectionName', 'sql'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_analytics',
+      description:
+        'Returns the time-series health score trend for a specific connection over the past N days. ' +
+        'Use when asked about trends, degradation patterns, or historical comparisons.',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectionName: {
+            type: 'string',
+            description: 'Exact connection name from the fleet list',
+          },
+          days: {
+            type: 'number',
+            description: 'Number of days of history to return (1–90, default 7)',
+          },
+        },
+        required: ['connectionName'],
+      },
+    },
+  },
+]
+
 export async function* streamChat(
   botId: BotId,
   history: ChatMessage[],
   context?: AgentContext,
+  onToolCall?: (req: ToolCallRequest) => Promise<ToolCallResult>,
 ): AsyncGenerator<string> {
   const client = makeClient()
 
@@ -199,23 +274,100 @@ export async function* streamChat(
   const systemPrompt = SYSTEM_PROMPTS[botId]
   const contextBlock  = context ? buildContextBlock(context) : ''
 
-  const messages: ChatMessage[] = [
+  // Build mutable message array — we append tool call + result pairs each round.
+  // Cast to `any[]` so we can push OpenAI tool-role messages without fighting TS types.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messages: any[] = [
     { role: 'system', content: contextBlock ? `${systemPrompt}\n\n${contextBlock}` : systemPrompt },
     ...history,
   ]
 
+  const tools = onToolCall ? AGENT_TOOLS : undefined
+  const MAX_TOOL_ROUNDS = 5   // prevent infinite loops
+
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30_000)
+  const timeout = setTimeout(() => controller.abort(), 60_000)   // longer budget with tool calls
 
   try {
-    const stream = await client.chat.completions.create(
-      { model: PREFERRED_MODEL, messages, stream: true },
-      { signal: controller.signal },
-    )
+    for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
+      const stream = await client.chat.completions.create(
+        {
+          model: PREFERRED_MODEL,
+          messages,
+          stream: true,
+          ...(tools ? { tools, tool_choice: 'auto' } : {}),
+        },
+        { signal: controller.signal },
+      )
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content
-      if (delta) yield delta
+      // Accumulate the streamed response so we can inspect finish_reason + tool_calls
+      let contentBuffer   = ''
+      let finishReason    = ''
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toolCallMap   = new Map<number, any>()   // index → in-progress tool call
+
+      for await (const chunk of stream) {
+        const choice = chunk.choices[0]
+        if (!choice) continue
+
+        // Accumulate text delta
+        const textDelta = choice.delta?.content
+        if (textDelta) {
+          contentBuffer += textDelta
+          yield textDelta
+        }
+
+        // Accumulate tool call deltas
+        const tcDeltas = choice.delta?.tool_calls
+        if (tcDeltas) {
+          for (const tc of tcDeltas) {
+            if (!toolCallMap.has(tc.index)) {
+              toolCallMap.set(tc.index, { id: '', type: 'function', function: { name: '', arguments: '' } })
+            }
+            const existing = toolCallMap.get(tc.index)!
+            if (tc.id)                       existing.id                    = tc.id
+            if (tc.function?.name)           existing.function.name         += tc.function.name
+            if (tc.function?.arguments)      existing.function.arguments    += tc.function.arguments
+          }
+        }
+
+        if (choice.finish_reason) finishReason = choice.finish_reason
+      }
+
+      // ── Text turn complete — no tool calls needed ──────────────────────────
+      if (finishReason !== 'tool_calls' || toolCallMap.size === 0 || !onToolCall) break
+
+      // ── Tool call turn ─────────────────────────────────────────────────────
+      // Push the assistant's tool-call message, then execute each tool and push
+      // the results so the model can continue the conversation.
+      const toolCallList = Array.from(toolCallMap.values())
+      messages.push({ role: 'assistant', content: contentBuffer || null, tool_calls: toolCallList })
+
+      for (const tc of toolCallList) {
+        let parsedArgs: Record<string, unknown> = {}
+        try { parsedArgs = JSON.parse(tc.function.arguments || '{}') } catch { /* use empty */ }
+
+        // Signal the UI that a tool is being invoked
+        yield `\n[TOOL_CALL:${tc.function.name}:${JSON.stringify(parsedArgs)}]`
+
+        let toolResult: Record<string, unknown>
+        try {
+          const res = await onToolCall({ id: tc.id, name: tc.function.name, arguments: parsedArgs })
+          toolResult = res.result
+        } catch (e) {
+          toolResult = { error: e instanceof Error ? e.message : String(e) }
+        }
+
+        messages.push({
+          role:         'tool',
+          tool_call_id: tc.id,
+          content:      JSON.stringify(toolResult),
+        })
+
+        // Signal the UI that the tool call is done
+        yield `[TOOL_RESULT:${tc.id}:${JSON.stringify(toolResult)}]`
+      }
+      // Continue to next round — model will now generate a response using tool results
     }
   } catch (err: unknown) {
     const isAborted = err instanceof Error && err.name === 'AbortError'

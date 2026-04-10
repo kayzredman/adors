@@ -3,7 +3,11 @@ import { z } from 'zod'
 import { requireAuth } from '../middleware/auth.js'
 import { supabase } from '../config/supabase.js'
 import { streamChat } from '@adors/agents'
-import type { BotId, ChatMessage, AgentContext, ConnectionContext } from '@adors/agents'
+import type { BotId, ChatMessage, AgentContext, ConnectionContext, ToolCallRequest } from '@adors/agents'
+import { getAdapter } from '../adapters/index.js'
+import { getConnectionById, getConnectionCredentials } from '../services/connectionService.js'
+import { logActivity } from '../services/activityService.js'
+import type { DbCredentials } from '../adapters/types.js'
 
 const router = Router()
 
@@ -104,8 +108,136 @@ router.post('/chat', requireAuth, async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no')    // Nginx: disable proxy buffering
   res.flushHeaders()
 
+  // ─── Tool executor ─────────────────────────────────────────────────────────
+  // Only DBA+ roles may trigger live query execution.
+  const canExecuteTools = req.user && ['dba', 'super_admin'].includes(req.user.role)
+
+  const onToolCall = !canExecuteTools ? undefined : async (toolReq: ToolCallRequest) => {
+    const { name, arguments: args, id: toolCallId } = toolReq
+
+    if (name === 'get_fleet_health') {
+      // Already in context — return a summary of the fleet we built above
+      const summary = context?.fleet?.map(c => ({
+        name: c.connectionName,
+        status: c.healthStatus ?? 'unknown',
+        score: c.healthScore,
+        alerts: c.activeAlerts ?? 0,
+        blockedSessions: c.blockedSessions ?? 0,
+      })) ?? []
+      return { toolCallId, result: { fleet: summary } }
+    }
+
+    if (name === 'execute_query') {
+      const connectionName = String(args['connectionName'] ?? '')
+      const sql            = String(args['sql'] ?? '')
+
+      if (!connectionName || !sql) {
+        return { toolCallId, result: { error: 'connectionName and sql are required' } }
+      }
+
+      // Resolve connection from fleet
+      const rawConn = context?.fleet
+        ? await supabase
+            .from('connections')
+            .select('id, name, db_type, host, port, database_name, oracle_privilege')
+            .eq('name', connectionName)
+            .single()
+            .then(r => r.data)
+        : null
+
+      if (!rawConn) {
+        return { toolCallId, result: { error: `Connection "${connectionName}" not found in fleet` } }
+      }
+
+      // Fetch encrypted credentials
+      const stored = await getConnectionCredentials(rawConn.id)
+      if (!stored) {
+        return { toolCallId, result: { error: `No credentials stored for "${connectionName}"` } }
+      }
+
+      const creds: DbCredentials = {
+        host:     rawConn.host,
+        port:     rawConn.port,
+        database: rawConn.database_name ?? '',
+        username: stored.username,
+        password: stored.password,
+        options:  rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
+      }
+
+      const adapter = getAdapter(rawConn.db_type)
+      if (!adapter) {
+        return { toolCallId, result: { error: `No adapter for db_type "${rawConn.db_type}"` } }
+      }
+
+      const actorId   = req.user!.id
+      const actorName = req.user!.email
+
+      try {
+        const result = await adapter.executeQuery(creds, sql, 10_000)
+
+        // Audit log — every tool query is recorded
+        logActivity({
+          actorId, actorName,
+          action:     'agent_query',
+          targetType: 'connection',
+          targetId:   rawConn.id,
+          payload:    { connectionName, sql, rowCount: result.rowCount, executionMs: result.executionMs },
+        }).catch(() => {})
+
+        return { toolCallId, result }
+      } catch (err) {
+        logActivity({
+          actorId, actorName,
+          action:     'agent_query_failed',
+          targetType: 'connection',
+          targetId:   rawConn.id,
+          payload:    { connectionName, sql, error: err instanceof Error ? err.message : String(err) },
+        }).catch(() => {})
+        return { toolCallId, result: { error: err instanceof Error ? err.message : String(err) } }
+      }
+    }
+
+    if (name === 'get_analytics') {
+      const connectionName = String(args['connectionName'] ?? '')
+      const days = Math.min(90, Math.max(1, Number(args['days'] ?? 7)))
+
+      const conn = context?.fleet?.find(c => c.connectionName === connectionName)
+      if (!conn) {
+        return { toolCallId, result: { error: `Connection "${connectionName}" not found in fleet` } }
+      }
+
+      const rawConn = await supabase
+        .from('connections')
+        .select('id')
+        .eq('name', connectionName)
+        .single()
+        .then(r => r.data)
+
+      if (!rawConn) return { toolCallId, result: { error: 'Connection not found' } }
+
+      const since = new Date(Date.now() - days * 86400_000).toISOString()
+      const { data: snapshots } = await supabase
+        .from('health_snapshots')
+        .select('scored_at, score, status')
+        .eq('connection_id', rawConn.id)
+        .gte('scored_at', since)
+        .order('scored_at', { ascending: true })
+
+      return {
+        toolCallId,
+        result: {
+          connectionName,
+          days,
+          series: (snapshots ?? []).map(s => ({ t: s.scored_at, score: s.score, status: s.status })),
+        },
+      }
+    }
+
+    return { toolCallId, result: { error: `Unknown tool: ${name}` } }
+  }
+
   try {
-    const gen = streamChat(botId as BotId, messages as ChatMessage[], context)
+    const gen = streamChat(botId as BotId, messages as ChatMessage[], context, onToolCall)
     for await (const chunk of gen) {
       // SSE data frame
       res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`)

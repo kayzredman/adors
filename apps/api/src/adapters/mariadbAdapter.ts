@@ -6,6 +6,16 @@
 
 import type { DbAdapter, DbCredentials } from './types.js'
 
+/** Reject anything that isn't a read-only statement. */
+function validateReadOnlySql(sql: string): void {
+  const trimmed = sql.trim().replace(/\/\*[\s\S]*?\*\//g, '').trim()
+  const keyword = trimmed.split(/\s+/)[0]?.toUpperCase() ?? ''
+  const allowed = new Set(['SELECT', 'WITH', 'EXPLAIN', 'DESCRIBE', 'SHOW'])
+  if (!allowed.has(keyword)) {
+    throw new Error(`Only read-only queries are allowed. Got: ${keyword}`)
+  }
+}
+
 export class MariaDbAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
     const mysqlMod = await import('mysql2/promise').catch(() => {
@@ -124,6 +134,35 @@ export class MariaDbAdapter implements DbAdapter {
       return { ok: true, latency_ms: Date.now() - start }
     } catch {
       return { ok: false, latency_ms: Date.now() - start }
+    } finally {
+      conn?.end()
+    }
+  }
+
+  async executeQuery(creds: DbCredentials, sql: string, timeoutMs = 10_000): Promise<import('./types.js').QueryResult> {
+    validateReadOnlySql(sql)
+    const mysqlMod = await import('mysql2/promise')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mysql: typeof import('mysql2/promise') = (mysqlMod as any).default ?? mysqlMod
+    let conn: any
+    const start = Date.now()
+    try {
+      conn = await mysql.createConnection({
+        host: creds.host, port: creds.port,
+        user: creds.username, password: creds.password,
+        database: creds.database,
+        connectTimeout: 5000,
+        ...((creds.options ?? {}) as any),
+      })
+      await conn.query(`SET SESSION max_execution_time=${timeoutMs}`)
+      const [rawRows, fields] = await conn.query(sql)
+      const columns = (fields as any[]).map((f: any) => f.name as string)
+      const rows = (rawRows as any[]).map((r: any) => {
+        const out: Record<string, unknown> = {}
+        for (const col of columns) out[col] = r[col] ?? null
+        return out
+      })
+      return { columns, rows, rowCount: rows.length, executionMs: Date.now() - start }
     } finally {
       conn?.end()
     }

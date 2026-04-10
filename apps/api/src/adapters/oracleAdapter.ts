@@ -11,6 +11,16 @@ import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
 import type { DbAdapter, DbCredentials } from './types.js'
 
+/** Reject anything that isn't a read-only statement. */
+function validateReadOnlySql(sql: string): void {
+  const trimmed = sql.trim().replace(/\/\*[\s\S]*?\*\//g, '').trim()
+  const keyword = trimmed.split(/\s+/)[0]?.toUpperCase() ?? ''
+  const allowed = new Set(['SELECT', 'WITH', 'EXPLAIN', 'DESCRIBE', 'SHOW'])
+  if (!allowed.has(keyword)) {
+    throw new Error(`Only read-only queries are allowed. Got: ${keyword}`)
+  }
+}
+
 // initOracleClient() may only be called once per Node process.
 let _thickInitDone  = false
 let _thickAvailable: boolean | null = null   // null = not yet probed
@@ -219,6 +229,27 @@ export class OracleAdapter implements DbAdapter {
       return { ok: true, latency_ms: Date.now() - start }
     } catch {
       return { ok: false, latency_ms: Date.now() - start }
+    }
+  }
+
+  async executeQuery(creds: DbCredentials, sql: string, timeoutMs = 10_000): Promise<import('./types.js').QueryResult> {
+    validateReadOnlySql(sql)
+    const conn = await getOracleConnection(creds)
+    const start = Date.now()
+    try {
+      const timeoutHandle = setTimeout(() => { conn.close().catch(() => {}) }, timeoutMs)
+      const result = await conn.execute(sql, [], { outFormat: 4002, maxRows: 500 })
+      clearTimeout(timeoutHandle)
+      const rawRows = (result.rows as Record<string, unknown>[]) ?? []
+      const columns = result.metaData?.map((m: any) => String(m.name ?? '')) ?? Object.keys(rawRows[0] ?? {})
+      const rows = rawRows.map(r => {
+        const out: Record<string, unknown> = {}
+        for (const col of columns) out[col] = r[col] ?? null
+        return out
+      })
+      return { columns, rows, rowCount: rows.length, executionMs: Date.now() - start }
+    } finally {
+      await conn.close().catch(() => {})
     }
   }
 

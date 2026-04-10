@@ -10,6 +10,12 @@ export interface DbAdapter {
    */
   getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>>
   testConnection(creds: DbCredentials): Promise<{ ok: boolean; latency_ms: number }>
+  /**
+   * Execute a read-only SQL query for agent tool calling.
+   * Only SELECT / WITH / EXPLAIN statements are accepted — the adapter validates
+   * this before sending to the database.
+   */
+  executeQuery(creds: DbCredentials, sql: string, timeoutMs?: number): Promise<QueryResult>
 }
 
 export interface DbCredentials {
@@ -20,4 +26,11 @@ export interface DbCredentials {
   password: string
   /** Extra driver-specific options */
   options?: Record<string, unknown>
+}
+
+export interface QueryResult {
+  columns:     string[]
+  rows:        Record<string, unknown>[]
+  rowCount:    number
+  executionMs: number
 }

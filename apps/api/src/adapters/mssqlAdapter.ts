@@ -6,6 +6,16 @@
 
 import type { DbAdapter, DbCredentials } from './types.js'
 
+/** Reject anything that isn't a read-only statement. */
+function validateReadOnlySql(sql: string): void {
+  const trimmed = sql.trim().replace(/\/\*[\s\S]*?\*\//g, '').trim()
+  const keyword = trimmed.split(/\s+/)[0]?.toUpperCase() ?? ''
+  const allowed = new Set(['SELECT', 'WITH', 'EXPLAIN'])
+  if (!allowed.has(keyword)) {
+    throw new Error(`Only read-only queries are allowed. Got: ${keyword}`)
+  }
+}
+
 export class MssqlAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
     const mssqlMod = await import('mssql').catch(() => {
@@ -130,6 +140,29 @@ export class MssqlAdapter implements DbAdapter {
       return { ok: true, latency_ms: Date.now() - start }
     } catch {
       return { ok: false, latency_ms: Date.now() - start }
+    } finally {
+      pool?.close()
+    }
+  }
+
+  async executeQuery(creds: DbCredentials, sql: string, timeoutMs = 10_000): Promise<import('./types.js').QueryResult> {
+    validateReadOnlySql(sql)
+    const mssqlMod = await import('mssql')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mssql: typeof import('mssql') = (mssqlMod as any).default ?? mssqlMod
+    let pool: any
+    const start = Date.now()
+    try {
+      pool = await mssql.connect({
+        user: creds.username, password: creds.password,
+        server: creds.host, port: creds.port, database: creds.database,
+        options: { trustServerCertificate: true, encrypt: false },
+        connectionTimeout: 5000, requestTimeout: timeoutMs,
+      })
+      const result = await pool.request().query(sql)
+      const rawRows: Record<string, unknown>[] = result.recordset ?? []
+      const columns = rawRows.length ? Object.keys(rawRows[0]) : []
+      return { columns, rows: rawRows.map(r => ({ ...r })), rowCount: rawRows.length, executionMs: Date.now() - start }
     } finally {
       pool?.close()
     }

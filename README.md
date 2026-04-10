@@ -1,14 +1,16 @@
 # ADORS — Agentic Database Observability & Remediation System
 
-> Enterprise-grade AI-powered Database SRE platform. Proactive monitoring, autonomous remediation, and multi-agent intelligence for Oracle, MSSQL, and MariaDB fleets.
+> Self-hosted AIOps platform for Oracle, MSSQL, and MariaDB fleets. Real-time health monitoring, agentic AI chat with live tool calling, UAT-first script execution, and full analytics history — all under one roof.
 
 ---
 
 ## What is ADORS?
 
-ADORS is a self-hosted AIOps platform that replaces reactive database monitoring with **autonomous, context-aware agents** that observe, diagnose, and remediate database issues — before they become incidents.
+ADORS replaces reactive database monitoring with **autonomous, context-aware agents** that observe, diagnose, and act — before issues become incidents.
 
-Each database type gets a dedicated AI agent (OraBot, MsBot, MarBot) backed by **GitHub Models API** (Claude / GPT-4o), equipped with database-specific tools and constrained by strict RBAC. Scripts are always tested in UAT sandboxes before production execution.
+Three specialist AI agents (OraBot, MsBot, MarBot) connect to your live database fleet via the GitHub Models API (GPT-4o-mini). They have access to **real-time health metrics, historical analytics, and tool-calling capability** — meaning they can run read-only diagnostic queries directly against your Oracle, MSSQL, and MariaDB instances mid-conversation, interpret the results, and suggest or execute remediation scripts after UAT sandbox verification.
+
+All health data collected every minute is permanently stored and queryable for trend analysis — including backup history, tablespace growth, replication lag, and performance deltas across all DB types.
 
 ---
 
@@ -16,51 +18,142 @@ Each database type gets a dedicated AI agent (OraBot, MsBot, MarBot) backed by *
 
 | Module | Description |
 |--------|-------------|
-| **Mission Control Dashboard** | Live fleet health overview — arc gauges, blocked sessions, active alerts, real-time activity feed |
-| **Bot Chat Hub** | Three parallel agent panels — chat directly with OraBot, MsBot, MarBot for contextual diagnosis |
-| **Alerts Center** | Filterable alerts by severity & status with one-click acknowledge/resolve |
-| **Script Library** | Remediation script catalog with risk levels, sandbox verification badges, UAT-first execution |
-| **UAT Sandbox** | Safe execution environment — test every script before it touches production |
+| **Mission Control** | Fleet health overview — arc gauges, blocked sessions, active alerts, real-time activity feed |
+| **Bot Chat Hub** | OraBot / MsBot / MarBot — AI agents with live DB context and tool-calling (run queries, trend charts, diagnostics) |
+| **Alerts Center** | Severity-ranked alerts with acknowledge/resolve actions, role-gated |
+| **Script Library** | Remediation script catalog with risk labels, sandbox verification badges, UAT-first execution |
+| **UAT Sandbox** | Safe execution environment — scripts always tested in UAT before touching production |
 | **Connections Manager** | Register and manage all DB connections, trigger manual health scans |
-| **Analytics** | Time-series health trends, tablespace growth projections, anomaly scoring |
+| **Analytics** | Time-series health trends, tablespace growth projections, backup trends, anomaly scoring for every connection |
+
+---
+
+## Architecture
+
+```
+┌─────────────────── apps/web  (Next.js 15, :3002) ────────────────────┐
+│  App Router pages → /  /chat  /alerts  /scripts  /sandbox  /analytics │
+│  shadcn/ui + Tailwind + Recharts                                       │
+│  SSE streaming for agent chat (token-by-token)                         │
+└──────────────────────────┬────────────────────────────────────────────┘
+                           │ REST + SSE  (Bearer JWT)
+┌──────────────────── apps/api  (Express, :4000) ───────────────────────┐
+│  Auth middleware  → local JWT verify (SUPABASE_JWT_SECRET)             │
+│  RBAC middleware  → role check from user_profiles table                │
+│  Rate limiter     → express-rate-limit per IP                          │
+│                                                                        │
+│  Routes:                                                               │
+│    GET  /api/connections           – fleet list + latest health        │
+│    GET  /api/connections/:id       – single connection detail          │
+│    GET  /api/alerts                – alert list with filters           │
+│    PATCH /api/alerts/:id           – acknowledge / resolve             │
+│    GET  /api/activity              – activity feed                     │
+│    GET  /api/analytics/fleet       – fleet health trends               │
+│    GET  /api/analytics/:id         – per-connection 30-day series      │
+│    POST /api/agents/chat           – SSE: agent chat with tool calling │
+│    POST /api/sandbox               – sandboxed script execution        │
+│    GET  /api/scripts               – remediation script catalog        │
+│    GET  /api/me                    – authenticated user profile        │
+│                                                                        │
+│  Workers (BullMQ):                                                     │
+│    priority-scan  (every 1 min)   – critical + warning connections     │
+│    routine-scan   (every 3 min)   – healthy connections                │
+│    → distributed lock via Redis SET NX (one leader across instances)  │
+│    → batched (3 concurrent) to protect PostgREST connection pool       │
+└──────────┬────────────────────────────────┬───────────────────────────┘
+           │                                │
+┌──────────▼──────────┐      ┌──────────────▼──────────────────────────┐
+│  Supabase (:8000)   │      │  DB Fleet (live adapters)                │
+│  – Postgres 15      │      │  oracleAdapter  → Oracle 11g–23c         │
+│  – GoTrue auth      │      │    thin→thick auto-fallback (NJS-138)    │
+│  – PostgREST API    │      │    SYSDBA/SYSOPER privilege support      │
+│  – Kong gateway     │      │  mssqlAdapter   → SQL Server 2012–2022   │
+│                     │      │    DMV-backed metrics, wait stats        │
+│  tables:            │      │  mariadbAdapter → MariaDB 10.4+          │
+│  connections        │      │    InnoDB, replication, slow query       │
+│  health_snapshots   │      │                                          │
+│  alerts             │      │  executeQuery() on all three             │
+│  scripts            │      │  → read-only SELECT only                 │
+│  activity_log       │      │  → 10s timeout                           │
+│  user_profiles      │      │  → audit logged                          │
+└─────────────────────┘      └──────────────────────────────────────────┘
+           │
+┌──────────▼──────────┐      ┌─────────────────────────────────────────┐
+│  Redis (:6379)      │      │  packages/agents                         │
+│  BullMQ job queues  │      │  streamChat() — async generator          │
+│  Scheduler lock     │      │  Tool definitions (OpenAI function spec) │
+│                     │      │  buildContextBlock() — live fleet summary│
+└─────────────────────┘      │  GitHub Models API (GPT-4o-mini)         │
+                             │    → tool_call loop (max 5 rounds)       │
+                             │    → execute_query / get_fleet_health    │
+                             │    → trend_chart / get_analytics         │
+                             └─────────────────────────────────────────┘
+```
+
+---
+
+## Agent Tool Calling
+
+Each bot can invoke database tools mid-conversation. The API executes them via the real adapter and feeds results back to the model — the bot never has raw credentials.
+
+### Available Tools (all bots)
+| Tool | What it does |
+|------|--------------|
+| `get_fleet_health` | Returns live health scores, alerts, blocked sessions for all connections this bot monitors |
+| `execute_query` | Runs a read-only SELECT on a specific connection (10s timeout, audit logged) |
+| `get_analytics` | Returns time-series health score trend for a connection over N days |
+
+### OraBot — Oracle Expert
+**Specialist queries:** tablespace usage · blocked sessions · redo log switches · top SQL by I/O · SGA/PGA stats · Data Guard lag · backup history (`v$backup_set`, `v$backup_piece`) · active waits (`v$session_wait`)
+
+### MsBot — SQL Server Expert
+**Specialist queries:** DMV wait stats · blocking SPIDs · buffer pool pressure · plan cache · AG sync state · log space usage · index fragmentation · backup history (`msdb..backupset`)
+
+### MarBot — MariaDB Expert
+**Specialist queries:** InnoDB buffer hit ratio · replication lag (`SHOW SLAVE STATUS`) · slow query log · long-running transactions · Galera state · connection pool saturation · backup history
+
+### Safety model
+- SQL validated at API layer: `SELECT` / `WITH` / `EXPLAIN` only — any DML/DDL rejected before execution
+- Credentials resolve through vault — bot never sees host/user/password
+- Every tool call written to `activity_log` with user ID, connection, query text, timing
+- Role gate: `analyst` cannot trigger `execute_query` — requires `dba` or above
+
+---
+
+## Data Retention & Analytics
+
+Every health scan is permanently stored in `health_snapshots`. This builds a time-series corpus for:
+- Health score trends (fleet-wide and per connection)
+- Tablespace growth projections
+- Replication lag history
+- Backup frequency and size trends (once backup metrics are collected)
+- Anomaly detection — score drops, session spikes, alert frequency
+
+All analytics data is queryable via `/api/analytics` and surfaced in the Analytics page with Recharts time-series panels.
 
 ---
 
 ## Tech Stack
 
 ```
-Frontend    Next.js 15 + Tailwind CSS + shadcn/ui + Recharts
-Backend     Node.js + Express (API server)
-Agents      OpenAI SDK + GitHub Models API (Claude 3.7 / GPT-4o)
-Queue       BullMQ + Redis 7
-App DB      Supabase (self-hosted Postgres + Auth + Realtime)
-DB Drivers  oracledb / mssql / mysql2
-Messaging   Baileys (WhatsApp) + Teams Adaptive Cards
-Infra       Docker Compose (dev / staging / prod)
+Frontend    Next.js 15 · Tailwind CSS · shadcn/ui · Recharts
+Backend     Node.js 22 · Express 5 · TypeScript (ESM)
+Agents      OpenAI SDK · GitHub Models API (GPT-4o-mini) · tool calling loop
+Queue       BullMQ · Redis 7 · distributed leader election via SET NX
+App DB      Supabase (self-hosted Postgres 15 · GoTrue auth · PostgREST · Kong)
+DB Drivers  oracledb v6 · mssql · mysql2
+Infra       Docker Compose (dev / prod) · pnpm monorepo
 ```
 
 ---
 
-## Agent Capabilities
-
-### OraBot — Oracle Expert
-**Tools:** `getTablespaceUsage` · `getBlockedSessions` · `getRedoLogSwitches` · `getTopSQLByIO` · `getSGAStats` · `execScript`
-
-### MsBot — SQL Server Expert
-**Tools:** `getDeadlocks` · `getExecutionPlans` · `getMemoryPressure` · `getBlockingSPIDs` · `getDMVStats` · `execScript`
-
-### MarBot — MariaDB Expert
-**Tools:** `getInnoDBBufferHitRate` · `getSlowQueryLog` · `getReplicationLag` · `getTableLocks` · `getConnectionPool` · `execScript`
-
----
-
-## RBAC Roles
+## RBAC
 
 | Role | Permissions |
 |------|-------------|
-| `super_admin` | Full access — users, connections, scripts, exec in prod |
-| `dba` | Execute scripts, manage alerts, full bot access |
-| `analyst` | Read-only dashboard, bot chat (no exec), view alerts |
+| `super_admin` | Full access — users, connections, scripts, production execution |
+| `dba` | Execute scripts, manage alerts, tool calling in bot, full analytics |
+| `analyst` | Read dashboard + analytics, bot chat read-only (no tool execution) |
 | `viewer` | Dashboard read-only, no bot access |
 
 ---
@@ -70,14 +163,137 @@ Infra       Docker Compose (dev / staging / prod)
 ```
 adors/
 ├── apps/
-│   ├── web/                  # Next.js 15 frontend
+│   ├── web/                        # Next.js 15 frontend  (:3002)
 │   │   └── src/
-│   │       ├── app/          # App Router pages & layouts
-│   │       ├── components/   # UI components
-│   │       ├── lib/          # API clients, utils
-│   │       └── hooks/        # React hooks
-│   └── api/                  # Express API server
+│   │       ├── app/                # App Router pages
+│   │       │   ├── page.tsx        # Mission Control dashboard
+│   │       │   ├── chat/           # Bot Chat Hub (SSE)
+│   │       │   ├── alerts/         # Alerts Center
+│   │       │   ├── scripts/        # Script Library
+│   │       │   ├── sandbox/        # UAT Sandbox
+│   │       │   ├── analytics/      # Analytics (fleet + per-connection)
+│   │       │   └── connections/    # Connections manager + detail panels
+│   │       ├── components/
+│   │       │   ├── dashboard/      # Health cards, gauges, activity feed
+│   │       │   ├── layout/         # Sidebar, nav
+│   │       │   └── ui/             # shadcn base components
+│   │       └── lib/                # API client, Supabase browser client
+│   │
+│   └── api/                        # Express API server  (:4000)
 │       └── src/
+│           ├── index.ts            # App bootstrap, graceful shutdown
+│           ├── routes/             # REST + SSE endpoints
+│           ├── services/
+│           │   ├── healthScanner.ts  # Scan orchestration, batching
+│           │   ├── connectionService.ts
+│           │   └── activityService.ts
+│           ├── adapters/
+│           │   ├── oracleAdapter.ts  # thin→thick, 11g compat, executeQuery
+│           │   ├── mssqlAdapter.ts   # DMV metrics, executeQuery
+│           │   ├── mariadbAdapter.ts # InnoDB/replication, executeQuery
+│           │   ├── credentialResolver.ts  # Vault / env credential fetch
+│           │   └── types.ts          # DbAdapter interface (incl. executeQuery)
+│           ├── workers/
+│           │   ├── healthScanWorker.ts  # BullMQ worker + leader election
+│           │   └── index.ts
+│           ├── middleware/
+│           │   ├── auth.ts           # JWT verify + role cache
+│           │   └── rateLimit.ts
+│           └── config/
+│               ├── supabase.ts
+│               └── redis.ts
+│
+├── packages/
+│   ├── agents/                     # Shared agent library
+│   │   └── src/index.ts            # streamChat(), tool definitions,
+│   │                               # buildContextBlock(), fleet context
+│   ├── db/
+│   │   ├── migrations/             # SQL schema migrations (001–004)
+│   │   └── seeds/                  # Dev seed data
+│   └── shared/                     # Shared TypeScript types
+│       └── src/index.ts            # DbConnection, HealthSnapshot, Alert, etc.
+│
+├── infra/
+│   ├── docker/                     # Per-service Dockerfiles
+│   ├── compose/                    # docker-compose.dev.yml / prod.yml
+│   └── nginx/                      # Reverse proxy (dev.conf)
+│
+└── CONTEXT.md                      # Dev session context (paste to restore state)
+```
+
+---
+
+## Build Phases
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **Phase 1** | ✅ | Scaffold, auth, connections manager, health scanner (mock) |
+| **Phase 2** | ✅ | Live DB adapters — Oracle (11g+), MSSQL, MariaDB |
+| **Phase 3** | ✅ | Analytics, activity feed, alerts, scripts, sandbox (shell pages) |
+| **Phase 4** | ✅ | Bot Chat Hub — SSE streaming, live fleet context injection, worker flood prevention |
+| **Phase 5** | 🔨 **Active** | Agentic tool calling — bots can run queries, return charts, diagnose live data |
+| **Phase 6** | Next | Script execution engine — sandbox verify → prod exec, audit trail |
+| **Phase 7** | Planned | User management — invite, role assignment, profile |
+| **Phase 8** | Planned | WhatsApp (Baileys) + Teams notifications, alert webhooks |
+| **Phase 9** | Planned | Docker prod hardening, security audit, light theme |
+
+---
+
+## Quick Start (Development)
+
+```bash
+# Prerequisites: Docker, Node.js 22+, pnpm
+
+git clone https://github.com/kayzredman/adors.git
+cd adors
+pnpm install
+
+# Copy and configure environment
+cp apps/api/.env.example apps/api/.env   # add GITHUB_TOKEN, DB creds
+# (apps/web reads NEXT_PUBLIC_API_URL from next.config.ts — no .env needed for dev)
+
+# Start the full stack
+docker compose -f infra/compose/docker-compose.dev.yml up -d
+
+# Run migrations + seed
+pnpm db:migrate && pnpm db:seed
+
+# Start dev servers (each in its own terminal — do NOT use & background)
+pnpm --filter api dev    # → http://localhost:4000
+pnpm --filter web dev    # → http://localhost:3002
+```
+
+> ⚠️  Always start the API with `pnpm --filter api dev` — bare `tsx watch src/index.ts` skips `.env` loading, causing Supabase to fall back to `:54321` and every auth request to return 403.
+
+---
+
+## Key Environment Variables (`apps/api/.env`)
+
+```bash
+GITHUB_TOKEN=           # Classic PAT — no scopes needed for GitHub Models
+SUPABASE_URL=           # http://localhost:8000 (Kong gateway)
+SUPABASE_SERVICE_KEY=   # Supabase service role JWT
+SUPABASE_JWT_SECRET=    # Must match GoTrue GOTRUE_JWT_SECRET
+REDIS_URL=              # redis://localhost:6379
+DATABASE_URL=           # postgresql://postgres:...@localhost:5432/postgres
+```
+
+DB credentials are stored per-connection via `credentials_ref` and resolved at scan time — never in top-level env vars in production.
+
+---
+
+## Security
+
+- DB credentials stored encrypted — resolved by `credentialResolver.ts` at scan time, never logged
+- All `execute_query` tool calls: SELECT-only validation, 10s timeout, full audit log
+- RBAC enforced at API middleware — role checked against `user_profiles` with 5-minute cache
+- Rate limiting on all endpoints (`express-rate-limit`)
+- JWT verified locally (no GoTrue network round-trip per request)
+- Scripts require UAT sandbox approval before any production execution
+
+---
+
+*ADORS — Built for DBA teams who need more than dashboards.*
 │           ├── routes/       # REST endpoints
 │           ├── services/     # Business logic
 │           ├── agents/       # OraBot, MsBot, MarBot
