@@ -111,7 +111,7 @@ export async function* streamChat(
   const client = makeClient()
 
   if (!client) {
-    yield 'GITHUB_TOKEN is not configured in the API environment. Set it in apps/api/.env to enable live AI responses.'
+    yield '⚠️ GITHUB_TOKEN is not configured. Add it to apps/api/.env to enable AI responses.'
     return
   }
 
@@ -123,38 +123,59 @@ export async function* streamChat(
     ...history,
   ]
 
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30_000)
+
   try {
-    const stream = await client.chat.completions.create({
-      model:  PREFERRED_MODEL,
-      messages,
-      stream: true,
-    })
+    const stream = await client.chat.completions.create(
+      { model: PREFERRED_MODEL, messages, stream: true },
+      { signal: controller.signal },
+    )
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content
       if (delta) yield delta
     }
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const isAborted = err instanceof Error && err.name === 'AbortError'
+    const msg       = err instanceof Error ? err.message : String(err)
+    const status    = (err as { status?: number }).status
 
-    // Try fallback model once
-    if (msg.includes('model') || msg.includes('404')) {
+    if (isAborted) {
+      yield '⚠️ Agent request timed out after 30 seconds.'
+      return
+    }
+
+    if (status === 401) {
+      yield '⚠️ GitHub token does not have the **models** permission.\n\n' +
+            'Generate a new token at https://github.com/settings/tokens/new\n' +
+            '→ Token type: **Classic**  (or Fine-grained with Models • Read)\n' +
+            '→ Copy the token into `GITHUB_TOKEN` in `apps/api/.env` and restart the API.'
+      return
+    }
+
+    // Fallback model on 404 / model-not-found
+    if (status === 404 || msg.includes('model') || msg.includes('404')) {
       try {
-        const stream2 = await client.chat.completions.create({
-          model:    FALLBACK_MODEL,
-          messages,
-          stream:   true,
-        })
+        const ctrl2 = new AbortController()
+        const t2    = setTimeout(() => ctrl2.abort(), 30_000)
+        const stream2 = await client.chat.completions.create(
+          { model: FALLBACK_MODEL, messages, stream: true },
+          { signal: ctrl2.signal },
+        )
         for await (const chunk of stream2) {
           const delta = chunk.choices[0]?.delta?.content
           if (delta) yield delta
         }
+        clearTimeout(t2)
         return
       } catch {
-        // fall through to error yield
+        // fall through to generic error
       }
     }
 
     yield `⚠️ Agent error: ${msg}`
+  } finally {
+    clearTimeout(timeout)
   }
 }

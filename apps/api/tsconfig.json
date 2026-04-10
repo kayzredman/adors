@@ -15,7 +15,8 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {
-      "@adors/shared": ["../../packages/shared/src"]
+      "@adors/shared": ["../../packages/shared/src"],
+      "@adors/agents": ["../../packages/agents/src"]
     }
   },
   "include": ["src"],
