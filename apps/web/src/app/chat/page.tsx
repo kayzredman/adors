@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { MessageCircle, Bot, Send, Sparkles, AlertTriangle } from 'lucide-react'
+import { MessageCircle, Bot, Send, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase/browser'
 
 type BotId = 'orabot' | 'msbot' | 'marbot'
 
@@ -46,7 +47,7 @@ const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; i
   },
 }
 
-const PLACEHOLDER_REPLY = "I'm in standby mode — agent wiring is coming in Phase 3. For now, I can show you the interface 🔧"
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
 
 function ChatColumn({ botId }: { botId: BotId }) {
   const config = BOT_CONFIG[botId]
@@ -68,11 +69,68 @@ function ChatColumn({ botId }: { botId: BotId }) {
     const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, timestamp: new Date() }
     setMessages(prev => [...prev, userMsg])
 
-    // Phase 3: replace with real agent API call
-    await new Promise(r => setTimeout(r, 600))
-    const botMsg: Message = { id: crypto.randomUUID(), role: 'bot', content: PLACEHOLDER_REPLY, timestamp: new Date() }
+    // Build message history (exclude intro messages — they start with intro- id)
+    const history = [...messages, userMsg]
+      .filter(m => !m.id.startsWith('intro-'))
+      .map(m => ({ role: m.role === 'bot' ? 'assistant' as const : 'user' as const, content: m.content }))
+
+    // Get JWT
+    const { data } = await createClient().auth.getSession()
+    const token = data.session?.access_token ?? ''
+
+    const botMsgId = crypto.randomUUID()
+    const botMsg: Message = { id: botMsgId, role: 'bot', content: '', timestamp: new Date() }
     setMessages(prev => [...prev, botMsg])
-    setSending(false)
+
+    try {
+      const response = await fetch(`${API_URL}/api/agents/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ botId, messages: history }),
+      })
+
+      if (!response.ok || !response.body) {
+        const errText = await response.text().catch(() => 'Request failed')
+        setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${errText}` } : m))
+        return
+      }
+
+      const reader  = response.body.getReader()
+      const decoder = new TextDecoder()
+      let   buffer  = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (raw === '[DONE]') break
+          try {
+            const { delta, error } = JSON.parse(raw)
+            if (error) {
+              setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${error}` } : m))
+            } else if (delta) {
+              setMessages(prev => prev.map(m =>
+                m.id === botMsgId ? { ...m, content: m.content + delta } : m
+              ))
+            }
+          } catch { /* malformed line — skip */ }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Connection error'
+      setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${msg}` } : m))
+    } finally {
+      setSending(false)
+    }
   }
 
   return (
@@ -95,12 +153,6 @@ function ChatColumn({ botId }: { botId: BotId }) {
         <div className="ml-auto">
           <Sparkles className="w-4 h-4 text-muted-foreground" />
         </div>
-      </div>
-
-      {/* Phase 3 notice */}
-      <div className="mx-3 mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-warning">
-        <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-        Agent wiring arrives in Phase 3. This is the chat shell.
       </div>
 
       {/* Messages */}
@@ -170,7 +222,7 @@ export default function ChatPage() {
           Bot Chat Hub
         </h1>
         <p className="text-muted-foreground text-sm mt-0.5">
-          Conversational AI agents for each database type — Phase 3 wiring pending
+          AI-powered agents with live DB context — set GITHUB_TOKEN in API env to enable
         </p>
       </div>
       <div className="flex-1 grid grid-cols-3 gap-4 min-h-0">
