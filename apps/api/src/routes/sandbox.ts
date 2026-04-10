@@ -2,8 +2,10 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { supabase } from '../config/supabase.js'
 import { requireAuth, requireDBA } from '../middleware/auth.js'
-import { scanConnection } from '../services/healthScanner.js'
 import { logActivity } from '../services/activityService.js'
+import { getAdapter } from '../adapters/index.js'
+import { getConnectionCredentials } from '../services/connectionService.js'
+import type { DbCredentials } from '../adapters/types.js'
 
 const router = Router()
 
@@ -14,7 +16,7 @@ router.get('/envs', requireAuth, async (req, res) => {
       .from('connections')
       .select(`
         id, name, db_type, host,
-        health_snapshots (health_score, overall_status, captured_at)
+        health_snapshots (score, status, scored_at)
       `)
       .eq('environment', 'uat')
       .order('name')
@@ -28,8 +30,8 @@ router.get('/envs', requireAuth, async (req, res) => {
         name: c.name,
         db_type: c.db_type,
         host: c.host,
-        health_status: snap?.overall_status ?? null,
-        last_checked_at: snap?.captured_at ?? null,
+        health_status: snap?.status ?? null,
+        last_checked_at: snap?.scored_at ?? null,
       }
     })
 
@@ -155,7 +157,7 @@ router.get('/runs/:id', requireAuth, async (req, res) => {
   }
 })
 
-// ─── Async execution helper (stub — Phase 3 replaces with real driver call) ──
+// ─── Async execution helper ──────────────────────────────────────────────────
 async function executeScriptAsync(
   runId: string,
   script: { id: string; name: string; sql_content: string; risk_level: string },
@@ -166,26 +168,71 @@ async function executeScriptAsync(
   await supabase.from('sandbox_runs').update({ status: 'running' }).eq('id', runId)
 
   try {
-    // Phase 2 stub: simulate execution with 1-2 second delay
-    // Phase 3: import live adapter and call adapter.executeScript(conn, script.sql_content)
-    await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000))
+    // Resolve stored credentials for this connection
+    const stored = await getConnectionCredentials(conn.id)
+    if (!stored) throw new Error(`No credentials stored for "${conn.name}"`)
 
-    const duration = Date.now() - start
-    const outputLog = `[STUB] Would execute on ${conn.name}:\n${script.sql_content}\n\nExecution time: ${duration}ms\n[INFO] Live execution arrives in Phase 3`
+    // Fetch full connection for host/port/database
+    const { data: rawConn } = await supabase
+      .from('connections')
+      .select('host, port, database_name, oracle_privilege')
+      .eq('id', conn.id)
+      .single()
+
+    if (!rawConn) throw new Error('Connection record not found')
+
+    const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
+    const creds: DbCredentials = {
+      host:     rawConn.host,
+      port:     rawConn.port ?? defaultPorts[conn.db_type] ?? 3306,
+      database: rawConn.database_name ?? '',
+      username: stored.username,
+      password: stored.password,
+      options:  rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
+    }
+
+    const adapter = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
+    const result  = await adapter.executeQuery(creds, script.sql_content, 30_000)
+
+    const duration   = Date.now() - start
+    const outputLog  = [
+      `-- ${script.name} on ${conn.name}`,
+      `-- Executed at ${new Date().toISOString()}`,
+      `-- Duration: ${duration}ms`,
+      ...(result.rowCount > 0 ? [`-- ${result.rowCount} rows affected/returned`] : []),
+      '',
+      script.sql_content,
+    ].join('\n')
 
     await supabase.from('sandbox_runs').update({
       status:           'success',
       output_log:       outputLog,
       exec_duration_ms: duration,
-      cpu_impact_pct:   Math.random() * 5,  // stub
+      cpu_impact_pct:   null,
     }).eq('id', runId)
 
-    await logActivity(userId, 'sandbox_run', `Ran "${script.name}" on ${conn.name}`)
+    await logActivity({
+      actorId:    userId,
+      actorName:  '',
+      action:     'sandbox_run',
+      targetType: 'connection',
+      targetId:   conn.id,
+      payload:    { scriptName: script.name, connectionName: conn.name, rowCount: result.rowCount, durationMs: duration },
+    })
   } catch (err: any) {
     await supabase.from('sandbox_runs').update({
       status:     'failure',
       output_log: `ERROR: ${err.message}`,
     }).eq('id', runId)
+
+    await logActivity({
+      actorId:    userId,
+      actorName:  '',
+      action:     'sandbox_run_failed',
+      targetType: 'connection',
+      targetId:   conn.id,
+      payload:    { scriptName: script.name, connectionName: conn.name, error: err.message },
+    }).catch(() => {})
   }
 }
 

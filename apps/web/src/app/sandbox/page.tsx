@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { FlaskConical, Play, CheckCircle2, XCircle, Clock, RefreshCw } from 'lucide-react'
-import { cn, formatRelativeTime, dbTypeLabel } from '@/lib/utils'
+import { cn, formatRelativeTime } from '@/lib/utils'
 import { api } from '@/lib/api'
+import { useAuth } from '@/components/providers/AuthProvider'
 
 type SandboxRun = {
   id: string
@@ -36,6 +37,8 @@ const STATUS_MAP = {
 }
 
 export default function SandboxPage() {
+  const { role } = useAuth()
+  const canRun   = role === 'dba' || role === 'super_admin'
   const [runs, setRuns]       = useState<SandboxRun[]>([])
   const [envs, setEnvs]       = useState<UatEnv[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,11 +48,11 @@ export default function SandboxPage() {
     setLoading(true)
     try {
       const [runsRes, envsRes] = await Promise.all([
-        fetch('/api/sandbox/runs').then(r => r.json()).catch(() => ({ data: [] })),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/sandbox/envs`).then(r => r.json()).catch(() => ({ data: [] })),
+        api.sandbox.runs().catch(() => ({ data: [] })),
+        api.sandbox.envs().catch(() => ({ data: [] })),
       ])
-      setRuns(runsRes.data ?? MOCK_RUNS)
-      setEnvs(envsRes.data  ?? MOCK_ENVS)
+      setRuns((runsRes.data as SandboxRun[]) ?? [])
+      setEnvs((envsRes.data as UatEnv[])    ?? [])
     } finally {
       setLoading(false)
     }
@@ -179,16 +182,3 @@ function StatusDot({ status }: { status: string | null }) {
   const cls = status === 'healthy' ? 'bg-success' : status === 'warning' ? 'bg-warning' : status === 'critical' ? 'bg-critical' : 'bg-muted-foreground'
   return <span className={cn('inline-block w-2 h-2 rounded-full', cls)} />
 }
-
-// Mock data until API is wired
-const MOCK_RUNS: SandboxRun[] = [
-  { id: '1', connection_id: '', connection_name: 'UAT_ORA_01', script_id: '', script_name: 'Resize Datafile', db_type: 'oracle', status: 'success', output_log: 'ALTER DATABASE DATAFILE +DATA/oradata/uat.dbf RESIZE 2048M;\nDatafile resized successfully.', cpu_impact_pct: 1.2, exec_duration_ms: 340, tested_at: new Date(Date.now() - 3600000).toISOString() },
-  { id: '2', connection_id: '', connection_name: 'UAT_SQL_01', script_id: '', script_name: 'MSSQL Memory Relief', db_type: 'mssql', status: 'success', output_log: 'DBCC FREEPROCCACHE executed.\nDBCC DROPCLEANBUFFERS executed.', cpu_impact_pct: 3.7, exec_duration_ms: 820, tested_at: new Date(Date.now() - 7200000).toISOString() },
-  { id: '3', connection_id: '', connection_name: 'UAT_MAR_01', script_id: '', script_name: 'ANALYZE Tables', db_type: 'mariadb', status: 'failure', output_log: 'ERROR 1146 (42S02): Table \'schema.orders\' doesn\'t exist', cpu_impact_pct: null, exec_duration_ms: 45, tested_at: new Date(Date.now() - 86400000).toISOString() },
-]
-
-const MOCK_ENVS: UatEnv[] = [
-  { id: '1', name: 'UAT_ORA_01', db_type: 'oracle',  host: 'uat-oracle.internal:1521', health_status: 'healthy', last_checked_at: new Date(Date.now() - 300000).toISOString() },
-  { id: '2', name: 'UAT_SQL_01', db_type: 'mssql',   host: 'uat-mssql.internal:1433',  health_status: 'healthy', last_checked_at: new Date(Date.now() - 600000).toISOString() },
-  { id: '3', name: 'UAT_MAR_01', db_type: 'mariadb', host: 'uat-mariadb.internal:3306', health_status: 'warning', last_checked_at: new Date(Date.now() - 900000).toISOString() },
-]
