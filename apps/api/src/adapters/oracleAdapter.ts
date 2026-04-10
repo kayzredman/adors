@@ -254,7 +254,9 @@ export class OracleAdapter implements DbAdapter {
 
   async #queryProcesses(conn: any) {
     const { rows } = await conn.execute(
-      `SELECT program, COUNT(*) AS cnt FROM v$process GROUP BY program ORDER BY cnt DESC FETCH FIRST 10 ROWS ONLY`,
+      `SELECT * FROM (
+         SELECT program, COUNT(*) AS cnt FROM v$process GROUP BY program ORDER BY cnt DESC
+       ) WHERE ROWNUM <= 10`,
       [], { outFormat: 4002 },
     )
     return (rows as any[]).map(r => ({ name: r.PROGRAM ?? 'unknown', count: Number(r.CNT) }))
@@ -262,10 +264,12 @@ export class OracleAdapter implements DbAdapter {
 
   async #queryWaits(conn: any) {
     const { rows } = await conn.execute(
-      `SELECT event, time_waited, wait_class
-       FROM v$system_event
-       WHERE wait_class NOT IN ('Idle','Other')
-       ORDER BY time_waited DESC FETCH FIRST 8 ROWS ONLY`,
+      `SELECT * FROM (
+         SELECT event, time_waited, wait_class
+         FROM v$system_event
+         WHERE wait_class NOT IN ('Idle','Other')
+         ORDER BY time_waited DESC
+       ) WHERE ROWNUM <= 8`,
       [], { outFormat: 4002 },
     )
     const breakdown: Record<string, number> = {}
