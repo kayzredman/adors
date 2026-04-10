@@ -15,38 +15,37 @@ import type { DbAdapter, DbCredentials } from './types.js'
 let _thickInitDone  = false
 let _thickAvailable: boolean | null = null   // null = not yet probed
 
+/** Recursively scan `dir` up to `depth` levels for oci.dll / libclntsh.so */
+function scanForOciDll(dir: string, depth: number): string | undefined {
+  if (depth < 0) return undefined
+  try {
+    if (existsSync(join(dir, 'oci.dll')) || existsSync(join(dir, 'libclntsh.so'))) return dir
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const found = scanForOciDll(join(dir, entry.name), depth - 1)
+      if (found) return found
+    }
+  } catch { /* skip unreadable */ }
+  return undefined
+}
+
 function findOracleClientDir(): string | undefined {
   // Explicit override wins
   if (process.env.ORACLE_LIB_DIR) return process.env.ORACLE_LIB_DIR
 
-  // Common Windows paths — Instant Client ZIPs, full Oracle Client, Oracle DB
-  const candidates: string[] = []
-
-  // ORACLE_HOME env (traditional full client / Oracle DB itself)
-  if (process.env.ORACLE_HOME) candidates.push(join(process.env.ORACLE_HOME, 'bin'))
-
-  // Instant Client extracted to common roots
-  for (const root of ['C:\\oracle', 'C:\\Oracle', 'C:\\app']) {
-    if (!existsSync(root)) continue
-    try {
-      for (const sub of readdirSync(root)) {
-        const p = join(root, sub)
-        if (sub.toLowerCase().includes('instantclient') ||
-            sub.toLowerCase().includes('client')) {
-          candidates.push(p)
-        }
-        // Oracle DB ORACLE_HOME style: C:\app\user\product\19\dbhome_1\bin
-        const bin = join(p, 'bin')
-        if (existsSync(bin)) candidates.push(bin)
-      }
-    } catch { /* skip unreadable */ }
+  // ORACLE_HOME env (traditional full client / Oracle DB on the server itself)
+  if (process.env.ORACLE_HOME) {
+    const bin = join(process.env.ORACLE_HOME, 'bin')
+    if (existsSync(join(bin, 'oci.dll'))) return bin
+    if (existsSync(join(process.env.ORACLE_HOME, 'oci.dll'))) return process.env.ORACLE_HOME
   }
 
-  // Find first directory that contains oci.dll (Windows) or libclntsh.so (Linux)
-  for (const dir of candidates) {
-    if (existsSync(join(dir, 'oci.dll')) || existsSync(join(dir, 'libclntsh.so'))) {
-      return dir
-    }
+  // Common Windows roots — recurse up to 5 levels to handle
+  //   C:\oracle\instantclient_21_13\oci.dll
+  //   C:\app\user\product\19.0.0\client_1\bin\oci.dll
+  for (const root of ['C:\\oracle', 'C:\\Oracle', 'C:\\app', 'C:\\Program Files\\Oracle']) {
+    const found = scanForOciDll(root, 5)
+    if (found) return found
   }
   return undefined
 }
