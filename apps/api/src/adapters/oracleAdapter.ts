@@ -1,32 +1,38 @@
 /**
  * Oracle live adapter using the `oracledb` driver.
  *
- * Queries the same V$ / DBA views that the mock adapter simulates.
- * Returns metrics in the exact shape OracleDetailPanel expects.
- *
- * Oracle Instant Client must be installed and ORACLE_LIB_DIR must be set,
- * OR the thin client mode can be used (oracledb 6+, no native libs).
- * Set ORACLE_THIN_CLIENT=true in env to force thin mode.
+ * Thin mode (default): no Instant Client needed, but requires Oracle DB 12.1+.
+ * Thick mode: set ORACLE_THICK_CLIENT=true + ORACLE_LIB_DIR in .env.
+ *             Required for Oracle 11g and below.
  */
 
 import type { DbAdapter, DbCredentials } from './types.js'
 
+// initOracleClient() may be called at most once per Node process.
+let _thickInitDone = false
+
+function ensureThickInit(oracledb: typeof import('oracledb')) {
+  if (_thickInitDone) return
+  const libDir = process.env.ORACLE_LIB_DIR
+  oracledb.initOracleClient(libDir ? { libDir } : undefined)
+  _thickInitDone = true
+}
+
+async function loadOracledb(): Promise<typeof import('oracledb')> {
+  const mod = await import('oracledb').catch(() => {
+    throw new Error('oracledb package not installed. Run: pnpm add oracledb')
+  })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const oracledb: typeof import('oracledb') = (mod as any).default ?? mod
+  if (process.env.ORACLE_THICK_CLIENT === 'true') {
+    ensureThickInit(oracledb)
+  }
+  return oracledb
+}
+
 export class OracleAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
-    // Lazy import — only installed if Oracle features are enabled
-    // CJS interop: dynamic ESM import wraps CJS module in .default
-    const oracledbMod = await import('oracledb').catch(() => {
-      throw new Error('oracledb package not installed. Run: pnpm add oracledb')
-    })
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const oracledb: typeof import('oracledb') = (oracledbMod as any).default ?? oracledbMod
-
-    // oracledb v6+ defaults to thin mode (no Instant Client required).
-    // Only call initOracleClient() when thick mode is explicitly requested.
-    if (process.env.ORACLE_THICK_CLIENT === 'true') {
-      const libDir = process.env.ORACLE_LIB_DIR
-      oracledb.initOracleClient(libDir ? { libDir } : undefined)
-    }
+    const oracledb = await loadOracledb()
 
     const conn = await oracledb.getConnection({
       user:          creds.username,
@@ -125,9 +131,7 @@ export class OracleAdapter implements DbAdapter {
   }
 
   async testConnection(creds: DbCredentials): Promise<{ ok: boolean; latency_ms: number }> {
-    const oracledbMod = await import('oracledb')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const oracledb: typeof import('oracledb') = (oracledbMod as any).default ?? oracledbMod
+    const oracledb = await loadOracledb()
     const start = Date.now()
     try {
       const conn = await oracledb.getConnection({

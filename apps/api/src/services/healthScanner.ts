@@ -297,27 +297,27 @@ async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
 }
 
 function deriveScore(dbType: string, details: Record<string, unknown>): number {
-  // Simple heuristic scoring from live metrics
+  // Heuristic scoring from flat live metric keys (matching live adapter output shape)
   let score = 100
   if (dbType === 'oracle') {
-    const dataPct = (details as any).storage?.data?.used_pct ?? 0
+    const dataPct = (details as any).storage_data_pct ?? 0
     if (dataPct >= 90) score -= 30
     else if (dataPct >= 80) score -= 15
-    const blocked = (details as any).sessions?.blocked ?? 0
+    const blocked = (details as any).sessions_blocked ?? 0
     if (blocked > 0) score -= Math.min(20, blocked * 5)
   }
   if (dbType === 'mssql') {
-    const memPct = (details as any).memory?.buffer_pool_pct ?? 0
+    const memPct = (details as any).buffer_pool_memory_pct ?? 0
     if (memPct >= 90) score -= 25
     else if (memPct >= 80) score -= 10
     const blocking = (details as any).blocking_spids ?? 0
     if (blocking > 0) score -= Math.min(20, blocking * 5)
   }
   if (dbType === 'mariadb') {
-    const hitRatio = (details as any).innodb_buffer_pool?.hit_ratio ?? 100
+    const hitRatio = (details as any).innodb_buffer_hit_ratio_pct ?? 100
     if (hitRatio < 85) score -= 20
     else if (hitRatio < 92) score -= 10
-    const lag = (details as any).replication?.lag_sec ?? 0
+    const lag = (details as any).replication_lag_sec ?? 0
     if (lag > 30) score -= 20
     else if (lag > 5) score -= 10
   }
@@ -334,6 +334,15 @@ export async function scanConnection(conn: DbConnection): Promise<HealthSnapshot
     // Live adapter threw (bad credentials, network, driver error)
     // Write a real critical snapshot — DBA must see this, not mock green data
     console.error(`[healthScanner] Live scan failed for ${conn.name}: ${err.message}`)
+
+    // NJS-138: thin mode does not support Oracle 11g — give an actionable message
+    let errorMsg: string = err.message
+    if (err.message?.includes('NJS-138') || err.errorNum === 138) {
+      errorMsg = 'NJS-138: This Oracle server version (11g or older) requires Thick mode. ' +
+        'Install Oracle Instant Client, then set ORACLE_THICK_CLIENT=true and ' +
+        'ORACLE_LIB_DIR=<path> in apps/api/.env and restart the API.'
+    }
+
     metrics = {
       score:            0,
       status:           'critical',
@@ -341,7 +350,7 @@ export async function scanConnection(conn: DbConnection): Promise<HealthSnapshot
       active_alerts:    1,
       details: {
         adapter:       'live',
-        error:         err.message,
+        error:         errorMsg,
         error_at:      new Date().toISOString(),
       },
     }
