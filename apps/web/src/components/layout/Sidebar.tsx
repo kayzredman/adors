@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
+import { useState, useEffect } from 'react'
 import {
   LayoutDashboard,
   MessageSquare,
@@ -13,6 +14,8 @@ import {
   Moon,
   Sun,
   LogOut,
+  Menu,
+  X,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -34,6 +37,10 @@ export function Sidebar() {
   const router   = useRouter()
   const { theme, setTheme } = useTheme()
   const supabase = createClient()
+  const [open, setOpen] = useState(false)
+
+  // Close drawer on route change
+  useEffect(() => { setOpen(false) }, [pathname])
 
   // Don't render on auth pages
   if (pathname === '/login') return null
@@ -44,7 +51,7 @@ export function Sidebar() {
     router.refresh()
   }
 
-  return (
+  const sidebarContent = (
     <aside className="dark flex flex-col w-64 h-full bg-card border-r border-border shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-3 px-5 py-5 border-b border-border">
@@ -53,6 +60,14 @@ export function Sidebar() {
           <p className="font-bold text-lg tracking-tight text-foreground">ADORS</p>
           <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Mission Control</p>
         </div>
+        {/* Close button — mobile only */}
+        <button
+          className="ml-auto lg:hidden text-muted-foreground hover:text-foreground"
+          onClick={() => setOpen(false)}
+          aria-label="Close menu"
+        >
+          <X className="w-5 h-5" />
+        </button>
       </div>
 
       {/* Navigation */}
@@ -72,9 +87,7 @@ export function Sidebar() {
             >
               <Icon className="w-4 h-4 shrink-0" />
               {label}
-              {label === 'Alerts Center' && (
-                <AlertBadge />
-              )}
+              {label === 'Alerts Center' && <AlertBadge />}
             </Link>
           )
         })}
@@ -103,9 +116,50 @@ export function Sidebar() {
       </div>
     </aside>
   )
+
+  return (
+    <>
+      {/* ── Desktop: always-visible sidebar ── */}
+      <div className="hidden lg:flex h-full">
+        {sidebarContent}
+      </div>
+
+      {/* ── Mobile: hamburger button in a top bar ── */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-40 flex items-center gap-3 px-4 py-3 bg-card border-b border-border dark">
+        <button
+          onClick={() => setOpen(true)}
+          aria-label="Open menu"
+          className="text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <AdorsLogoLocal />
+        <span className="font-bold text-sm tracking-tight text-foreground">ADORS</span>
+      </div>
+
+      {/* ── Mobile: backdrop ── */}
+      {open && (
+        <div
+          className="lg:hidden fixed inset-0 z-40 bg-black/60 backdrop-blur-sm"
+          onClick={() => setOpen(false)}
+        />
+      )}
+
+      {/* ── Mobile: slide-in drawer ── */}
+      <div
+        className={cn(
+          'lg:hidden fixed top-0 left-0 z-50 h-full transition-transform duration-300 ease-in-out',
+          open ? 'translate-x-0' : '-translate-x-full'
+        )}
+      >
+        {sidebarContent}
+      </div>
+
+    </>
+  )
 }
 
-// Live alert badge — will use real data in Phase 5
+// Live alert badge
 function AlertBadge() {
   return (
     <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-critical text-[10px] font-bold text-white px-1">
@@ -114,7 +168,7 @@ function AlertBadge() {
   )
 }
 
-/** ADORS logo — imported from shared brand component */
 function AdorsLogoLocal() {
   return <AdorsLogo size={36} />
 }
+

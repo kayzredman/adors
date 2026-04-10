@@ -21,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AuthProvider>
             <div className="flex h-screen overflow-hidden bg-background">
               <Sidebar />
-              <main className="flex-1 overflow-y-auto bg-background transition-colors duration-300">
+              <main className="flex-1 overflow-y-auto bg-background transition-colors duration-300 pt-[52px] lg:pt-0">
                 {children}
               </main>
             </div>

@@ -164,7 +164,7 @@ router.post('/chat', requireAuth, async (req, res) => {
         options:  rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
       }
 
-      const adapter = getAdapter(rawConn.db_type)
+      const adapter = await getAdapter(rawConn.db_type)
       if (!adapter) {
         return { toolCallId, result: { error: `No adapter for db_type "${rawConn.db_type}"` } }
       }
@@ -239,7 +239,51 @@ router.post('/chat', requireAuth, async (req, res) => {
   try {
     const gen = streamChat(botId as BotId, messages as ChatMessage[], context, onToolCall)
     for await (const chunk of gen) {
-      // SSE data frame
+      const trimmed = chunk.trim()
+
+      // ── Tool-call start token: [TOOL_CALL:name:jsonArgs] ──────────────────
+      // Route as a typed SSE event so the client never receives raw JSON in text.
+      if (trimmed.startsWith('[TOOL_CALL:')) {
+        const body    = trimmed.slice('[TOOL_CALL:'.length, -1)   // strip prefix + outer ]
+        const sepIdx  = body.indexOf(':')
+        if (sepIdx !== -1) {
+          const name    = body.slice(0, sepIdx)
+          const argJson = body.slice(sepIdx + 1)
+          try {
+            const args = JSON.parse(argJson) as Record<string, unknown>
+            res.write(`event: tool_start\ndata: ${JSON.stringify({ name, connectionName: args['connectionName'], sql: args['sql'] })}\n\n`)
+          } catch {
+            res.write(`event: tool_start\ndata: ${JSON.stringify({ name })}\n\n`)
+          }
+        }
+        continue
+      }
+
+      // ── Tool-call result token: [TOOL_RESULT:id:jsonResult] ───────────────
+      if (trimmed.startsWith('[TOOL_RESULT:')) {
+        const body      = trimmed.slice('[TOOL_RESULT:'.length, -1)  // strip prefix + outer ]
+        const sepIdx    = body.indexOf(':')
+        if (sepIdx !== -1) {
+          const id         = body.slice(0, sepIdx)
+          const resultJson = body.slice(sepIdx + 1)
+          try {
+            const result = JSON.parse(resultJson) as Record<string, unknown>
+            const isError = Boolean(result['error'])
+            res.write(`event: tool_result\ndata: ${JSON.stringify({
+              id,
+              status:      isError ? 'error' : 'done',
+              rowCount:    result['rowCount'],
+              executionMs: result['executionMs'],
+              error:       result['error'] ?? undefined,
+            })}\n\n`)
+          } catch {
+            res.write(`event: tool_result\ndata: ${JSON.stringify({ id, status: 'error', error: 'Parse error' })}\n\n`)
+          }
+        }
+        continue
+      }
+
+      // ── Normal text delta ─────────────────────────────────────────────────
       res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`)
     }
   } catch (err) {

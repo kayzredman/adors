@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { MessageCircle, Bot, Send, Sparkles, Database, CheckCircle2, Loader2 } from 'lucide-react'
+import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity } from 'lucide-react'
+import { OracleIcon, MssqlIcon, MariaDbIcon } from '@/components/brand/VendorIcons'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/browser'
 
@@ -10,7 +11,6 @@ type BotId = 'orabot' | 'msbot' | 'marbot'
 type ToolCallState = {
   name:            string
   connectionName?: string
-  sql?:            string
   status:          'running' | 'done' | 'error'
   rowCount?:       number
   executionMs?:    number
@@ -18,18 +18,21 @@ type ToolCallState = {
 }
 
 type Message = {
-  id:         string
-  role:       'user' | 'bot'
-  content:    string
-  timestamp:  Date
+  id:        string
+  role:      'user' | 'bot'
+  content:   string
   toolCalls?: ToolCallState[]
 }
 
-const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; intro: string[] }> = {
+type BotIcon = React.ComponentType<{ size?: number; className?: string }>
+
+const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; hex: string; icon: BotIcon; intro: string[] }> = {
   orabot: {
     name: 'OraBot',
     dbType: 'Oracle',
     color: 'text-[#F80000]',
+    hex:   '#F80000',
+    icon: OracleIcon,
     intro: [
       "Hello! I'm **OraBot**, your Oracle Database AI assistant.",
       "I monitor your Oracle instances and can help diagnose issues, interpret AWR reports, and run diagnostic queries mid-conversation.",
@@ -39,7 +42,9 @@ const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; i
   msbot: {
     name: 'MsBot',
     dbType: 'SQL Server',
-    color: 'text-[#CC2927]',
+    color: 'text-[#0078D4]',
+    hex:   '#0078D4',
+    icon: MssqlIcon,
     intro: [
       "Hi there! I'm **MsBot**, your SQL Server AI assistant.",
       "I track DMV metrics, memory pressure, plan cache efficiency, and can run live diagnostic queries for you.",
@@ -49,7 +54,9 @@ const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; i
   marbot: {
     name: 'MarBot',
     dbType: 'MariaDB',
-    color: 'text-blue-400',
+    color: 'text-[#C0765A]',
+    hex:   '#C0765A',
+    icon: MariaDbIcon,
     intro: [
       "Hey! I'm **MarBot**, your MariaDB + replication AI assistant.",
       "I watch InnoDB buffer pool efficiency, replication lag, slow query trends, and can run queries live.",
@@ -60,34 +67,7 @@ const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; i
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
 
-// ─── Tool call token parsers ──────────────────────────────────────────────────
-// Tokens emitted by the agent: [TOOL_CALL:name:jsonArgs] and [TOOL_RESULT:id:jsonResult]
-// We strip these from the visible message and surface them as inline badges.
-
-const TOOL_CALL_RE  = /\[TOOL_CALL:([^:]+):(\{.*?\})\]/g
-const TOOL_RESULT_RE = /\[TOOL_RESULT:[^:]+:(\{.*?\})\]/g
-
-function parseToolCallToken(match: RegExpMatchArray): Partial<ToolCallState> & { name: string } {
-  const name = match[1]!
-  try {
-    const args = JSON.parse(match[2] ?? '{}')
-    return { name, connectionName: args.connectionName, sql: args.sql }
-  } catch {
-    return { name }
-  }
-}
-
-function parseToolResultToken(jsonStr: string): Pick<ToolCallState, 'status' | 'rowCount' | 'executionMs' | 'errorMsg'> {
-  try {
-    const res = JSON.parse(jsonStr)
-    if (res.error) return { status: 'error', errorMsg: res.error }
-    return { status: 'done', rowCount: res.rowCount, executionMs: res.executionMs }
-  } catch {
-    return { status: 'done' }
-  }
-}
-
-// Remove all agent control tokens from the visible text
+// Strip any leftover control tokens from history (safety net)
 function stripControlTokens(text: string): string {
   return text
     .replace(/\[TOOL_CALL:[^\]]+\]/g, '')
@@ -96,40 +76,56 @@ function stripControlTokens(text: string): string {
 }
 
 // ─── Tool call badge ──────────────────────────────────────────────────────────
+const TOOL_ICON: Record<string, React.ElementType> = {
+  execute_query:    Search,
+  get_fleet_health: Activity,
+  get_analytics:    BarChart2,
+}
+
+const TOOL_VERB: Record<string, string> = {
+  execute_query:    'Checking',
+  get_fleet_health: 'Fetching fleet health',
+  get_analytics:    'Analysing',
+}
+
 function ToolCallBadge({ tc }: { tc: ToolCallState }) {
-  const label = tc.connectionName
-    ? `${tc.name === 'execute_query' ? 'Querying' : tc.name} ${tc.connectionName}`
-    : tc.name
+  const Icon  = TOOL_ICON[tc.name] ?? Search
+  const verb  = TOOL_VERB[tc.name] ?? tc.name
+  const label = tc.connectionName ? `${verb} ${tc.connectionName}` : verb
 
   if (tc.status === 'running') {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/30 border border-border/50 rounded-lg px-2 py-1 w-fit">
-        <Loader2 className="w-3 h-3 animate-spin text-brand-400" />
-        <Database className="w-3 h-3 text-muted-foreground" />
-        <span>{label}…</span>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground py-0.5">
+        <Loader2 className="w-3 h-3 animate-spin text-brand-400 flex-shrink-0" />
+        <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
+        <span className="italic">{label}…</span>
       </div>
     )
   }
 
   if (tc.status === 'error') {
     return (
-      <div className="flex items-center gap-1.5 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-2 py-1 w-fit">
-        <Database className="w-3 h-3" />
-        <span>{label} — {tc.errorMsg ?? 'error'}</span>
+      <div className="flex items-center gap-2 text-xs text-destructive/80 py-0.5">
+        <AlertCircle className="w-3 h-3 flex-shrink-0" />
+        <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
+        <span>{label}</span>
+        {tc.errorMsg && <span className="opacity-70">— {tc.errorMsg}</span>}
       </div>
     )
   }
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-muted/30 border border-border/50 rounded-lg px-2 py-1 w-fit">
-      <CheckCircle2 className="w-3 h-3 text-success" />
-      <Database className="w-3 h-3" />
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-0.5">
+      <CheckCircle2 className="w-3 h-3 text-success flex-shrink-0" />
+      <Icon className="w-3 h-3 opacity-50 flex-shrink-0" />
       <span>{label}</span>
       {tc.rowCount !== undefined && (
-        <span className="text-success">{tc.rowCount} row{tc.rowCount !== 1 ? 's' : ''}</span>
+        <span className="text-foreground/50">
+          · {tc.rowCount} {tc.rowCount === 1 ? 'result' : 'results'}
+        </span>
       )}
       {tc.executionMs !== undefined && (
-        <span className="opacity-60">{tc.executionMs}ms</span>
+        <span className="opacity-40">· {tc.executionMs}ms</span>
       )}
     </div>
   )
@@ -139,20 +135,20 @@ function ToolCallBadge({ tc }: { tc: ToolCallState }) {
 function MessageContent({ content }: { content: string }) {
   const clean = stripControlTokens(content)
   return (
-    <>
-      {clean.split(/(\*\*.*?\*\*|\*.*?\*)/g).map((part, i) =>
+    <span className="whitespace-pre-wrap">
+      {clean.split(/(\*\*.*?\*\*|\*[^*\n]+?\*)/g).map((part, i) =>
         part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong>
           : part.startsWith('*') ? <em key={i}>{part.slice(1, -1)}</em>
           : <span key={i}>{part}</span>
       )}
-    </>
+    </span>
   )
 }
 
 function ChatColumn({ botId }: { botId: BotId }) {
   const config = BOT_CONFIG[botId]
   const [messages, setMessages] = useState<Message[]>(() =>
-    config.intro.map((content, i) => ({ id: `intro-${i}`, role: 'bot', content, timestamp: new Date() }))
+    config.intro.map((content, i) => ({ id: `intro-${i}`, role: 'bot', content }))
   )
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -166,7 +162,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
     setInput('')
     setSending(true)
 
-    const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, timestamp: new Date() }
+    const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text }
     setMessages(prev => [...prev, userMsg])
 
     // Build message history (exclude intro messages)
@@ -178,7 +174,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
     const token = data.session?.access_token ?? ''
 
     const botMsgId = crypto.randomUUID()
-    setMessages(prev => [...prev, { id: botMsgId, role: 'bot', content: '', timestamp: new Date(), toolCalls: [] }])
+    setMessages(prev => [...prev, { id: botMsgId, role: 'bot', content: '', toolCalls: [] }])
 
     try {
       const response = await fetch(`${API_URL}/api/agents/chat`, {
@@ -196,8 +192,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
       const reader  = response.body.getReader()
       const decoder = new TextDecoder()
       let   buffer  = ''
-      // We track active tool call index by name — one at a time per round
-      let   activeToolCallIndex = -1
+      let   pendingEvent = 'message'   // current SSE event type
 
       while (true) {
         const { value, done } = await reader.read()
@@ -207,280 +202,69 @@ function ChatColumn({ botId }: { botId: BotId }) {
         buffer = lines.pop() ?? ''
 
         for (const line of lines) {
+          // Track typed SSE event name
+          if (line.startsWith('event: ')) {
+            pendingEvent = line.slice(7).trim()
+            continue
+          }
+
+          // Empty line = end of SSE message block
+          if (line === '') {
+            pendingEvent = 'message'
+            continue
+          }
+
           if (!line.startsWith('data: ')) continue
           const raw = line.slice(6).trim()
           if (raw === '[DONE]') break
 
+          // ── Tool start ────────────────────────────────────────────────────
+          if (pendingEvent === 'tool_start') {
+            try {
+              const data = JSON.parse(raw) as { name: string; connectionName?: string }
+              setMessages(prev => prev.map(msg => {
+                if (msg.id !== botMsgId) return msg
+                const newTc: ToolCallState = { name: data.name, connectionName: data.connectionName, status: 'running' }
+                return { ...msg, toolCalls: [...(msg.toolCalls ?? []), newTc] }
+              }))
+            } catch { /* skip */ }
+            pendingEvent = 'message'
+            continue
+          }
+
+          // ── Tool result ───────────────────────────────────────────────────
+          if (pendingEvent === 'tool_result') {
+            try {
+              const data = JSON.parse(raw) as {
+                id: string; status: 'done' | 'error'
+                rowCount?: number; executionMs?: number; error?: string
+              }
+              setMessages(prev => prev.map(msg => {
+                if (msg.id !== botMsgId) return msg
+                // Update the most-recently-running tool call
+                let matched = false
+                const toolCalls = (msg.toolCalls ?? []).map(tc => {
+                  if (!matched && tc.status === 'running') {
+                    matched = true
+                    return { ...tc, status: data.status, rowCount: data.rowCount, executionMs: data.executionMs, errorMsg: data.error }
+                  }
+                  return tc
+                })
+                return { ...msg, toolCalls }
+              }))
+            } catch { /* skip */ }
+            pendingEvent = 'message'
+            continue
+          }
+
+          // ── Text delta ────────────────────────────────────────────────────
           try {
             const { delta, error } = JSON.parse(raw)
             if (error) {
               setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${error}` } : m))
               continue
             }
-            if (!delta) continue
-
-            // Check for TOOL_CALL token in this delta chunk
-            const tcMatch = [...delta.matchAll(TOOL_CALL_RE)]
-            if (tcMatch.length > 0) {
-              for (const m of tcMatch) {
-                const parsed = parseToolCallToken(m as RegExpMatchArray)
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id !== botMsgId) return msg
-                  const toolCalls = [...(msg.toolCalls ?? []), { ...parsed, status: 'running' as const }]
-                  activeToolCallIndex = toolCalls.length - 1
-                  return { ...msg, toolCalls }
-                }))
-              }
-            }
-
-            // Check for TOOL_RESULT token
-            const trMatch = [...delta.matchAll(TOOL_RESULT_RE)]
-            if (trMatch.length > 0 && activeToolCallIndex >= 0) {
-              for (const m of trMatch) {
-                const resultState = parseToolResultToken(m[1] ?? '{}')
-                const idx = activeToolCallIndex
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id !== botMsgId) return msg
-                  const toolCalls = (msg.toolCalls ?? []).map((tc, i) =>
-                    i === idx ? { ...tc, ...resultState } : tc
-                  )
-                  return { ...msg, toolCalls }
-                }))
-              }
-            }
-
-            // Append visible content (strip control tokens)
-            const visible = delta
-              .replace(/\[TOOL_CALL:[^\]]+\]/g, '')
-              .replace(/\[TOOL_RESULT:[^\]]+\]/g, '')
-            if (visible) {
-              setMessages(prev => prev.map(m =>
-                m.id === botMsgId ? { ...m, content: m.content + visible } : m
-              ))
-            }
-          } catch { /* malformed line — skip */ }
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Connection error'
-      setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${msg}` } : m))
-    } finally {
-      setSending(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/20">
-        <div className="relative">
-          <Bot className={cn('w-8 h-8', config.color)} />
-          <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-card" />
-        </div>
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-foreground text-sm">{config.name}</span>
-            <span className="text-[10px] font-bold text-success border border-success/30 bg-success/10 px-1.5 py-px rounded uppercase tracking-wide">
-              Online
-            </span>
-          </div>
-          <p className="text-xs text-muted-foreground">{config.dbType} AI Agent</p>
-        </div>
-        <div className="ml-auto">
-          <Sparkles className="w-4 h-4 text-muted-foreground" />
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {messages.map(msg => (
-          <div key={msg.id} className={cn('flex gap-2', msg.role === 'user' && 'flex-row-reverse')}>
-            {msg.role === 'bot' && <Bot className={cn('w-5 h-5 shrink-0 mt-0.5', config.color)} />}
-            <div className="flex flex-col gap-1.5 max-w-[85%]">
-              {/* Tool call badges — shown above the text response */}
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div className="flex flex-col gap-1">
-                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} />)}
-                </div>
-              )}
-              {/* Message bubble */}
-              {(stripControlTokens(msg.content) || msg.role === 'user') && (
-                <div className={cn(
-                  'rounded-xl px-3 py-2 text-sm leading-relaxed',
-                  msg.role === 'bot'
-                    ? 'bg-muted/50 border border-border/50 text-foreground'
-                    : 'bg-brand-500 text-white'
-                )}>
-                  <MessageContent content={msg.content} />
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-        {sending && messages[messages.length - 1]?.id && !messages[messages.length - 1]?.content && (
-          <div className="flex gap-2">
-            <Bot className={cn('w-5 h-5 shrink-0 mt-0.5', config.color)} />
-            <div className="bg-muted/50 border border-border/50 rounded-xl px-3 py-2">
-              <span className="flex gap-1">
-                {[0, 1, 2].map(i => (
-                  <span key={i} className="w-1.5 h-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
-                ))}
-              </span>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Input */}
-      <div className="px-4 py-3 border-t border-border">
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-          <input
-            className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
-            placeholder={`Ask ${config.name}…`}
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && send()}
-          />
-          <button
-            onClick={send}
-            disabled={!input.trim() || sending}
-            className="p-1 text-brand-400 hover:text-brand-300 disabled:opacity-30 transition-colors"
-          >
-            <Send className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function ChatPage() {
-  return (
-    <div className="flex flex-col h-screen p-6 gap-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-foreground">
-          <MessageCircle className="w-6 h-6 text-brand-400" />
-          Bot Chat Hub
-        </h1>
-        <p className="text-muted-foreground text-sm mt-0.5">
-          AI-powered agents with live DB context and tool calling — requires DBA role or above
-        </p>
-      </div>
-      <div className="flex-1 grid grid-cols-3 gap-4 min-h-0">
-        <ChatColumn botId="orabot" />
-        <ChatColumn botId="msbot" />
-        <ChatColumn botId="marbot" />
-      </div>
-    </div>
-  )
-}
-
-
-const BOT_CONFIG: Record<BotId, { name: string; dbType: string; color: string; intro: string[] }> = {
-  orabot: {
-    name: 'OraBot',
-    dbType: 'Oracle',
-    color: 'text-[#F80000]',
-    intro: [
-      "Hello! I'm **OraBot**, your Oracle Database AI assistant.",
-      "I monitor your Oracle instances and can help you diagnose issues, interpret AWR reports, and execute remediation scripts after UAT verification.",
-      "Try asking: *\"Why is tablespace USERS at 89%?\"* or *\"Kill blocking session 142\"*",
-    ],
-  },
-  msbot: {
-    name: 'MsBot',
-    dbType: 'SQL Server',
-    color: 'text-[#CC2927]',
-    intro: [
-      "Hi there! I'm **MsBot**, your SQL Server AI assistant.",
-      "I track DMV metrics, memory pressure, plan cache efficiency, and can walk you through resolving blocking chains.",
-      "Try: *\"What's causing the CXPACKET waits?\"* or *\"Show me the top 5 longest running queries\"*",
-    ],
-  },
-  marbot: {
-    name: 'MarBot',
-    dbType: 'MariaDB',
-    color: 'text-blue-400',
-    intro: [
-      "Hey! I'm **MarBot**, your MariaDB + replication AI assistant.",
-      "I watch InnoDB buffer pool efficiency, replication lag, slow query trends, and can help optimize your database configuration.",
-      "Try: *\"Replication lag is 45 seconds — what do I do?\"* or *\"InnoDB hit ratio dropped to 82%\"*",
-    ],
-  },
-}
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'
-
-function ChatColumn({ botId }: { botId: BotId }) {
-  const config = BOT_CONFIG[botId]
-  const [messages, setMessages] = useState<Message[]>(() =>
-    config.intro.map((content, i) => ({ id: `intro-${i}`, role: 'bot', content, timestamp: new Date() }))
-  )
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
-  const bottomRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
-
-  async function send() {
-    const text = input.trim()
-    if (!text || sending) return
-    setInput('')
-    setSending(true)
-
-    const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text, timestamp: new Date() }
-    setMessages(prev => [...prev, userMsg])
-
-    // Build message history (exclude intro messages — they start with intro- id)
-    const history = [...messages, userMsg]
-      .filter(m => !m.id.startsWith('intro-'))
-      .map(m => ({ role: m.role === 'bot' ? 'assistant' as const : 'user' as const, content: m.content }))
-
-    // Get JWT
-    const { data } = await createClient().auth.getSession()
-    const token = data.session?.access_token ?? ''
-
-    const botMsgId = crypto.randomUUID()
-    const botMsg: Message = { id: botMsgId, role: 'bot', content: '', timestamp: new Date() }
-    setMessages(prev => [...prev, botMsg])
-
-    try {
-      const response = await fetch(`${API_URL}/api/agents/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ botId, messages: history }),
-      })
-
-      if (!response.ok || !response.body) {
-        const errText = await response.text().catch(() => 'Request failed')
-        setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${errText}` } : m))
-        return
-      }
-
-      const reader  = response.body.getReader()
-      const decoder = new TextDecoder()
-      let   buffer  = ''
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() ?? ''
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue
-          const raw = line.slice(6).trim()
-          if (raw === '[DONE]') break
-          try {
-            const { delta, error } = JSON.parse(raw)
-            if (error) {
-              setMessages(prev => prev.map(m => m.id === botMsgId ? { ...m, content: `⚠️ ${error}` } : m))
-            } else if (delta) {
+            if (delta) {
               setMessages(prev => prev.map(m =>
                 m.id === botMsgId ? { ...m, content: m.content + delta } : m
               ))
@@ -499,48 +283,69 @@ function ChatColumn({ botId }: { botId: BotId }) {
   return (
     <div className="flex flex-col h-full rounded-xl border border-border bg-card overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/20">
+      <div
+        className="flex items-center gap-3 px-4 py-3 border-b border-border"
+        style={{ background: `linear-gradient(135deg, ${config.hex}22 0%, ${config.hex}08 60%, transparent 100%)` }}
+      >
         <div className="relative">
-          <Bot className={cn('w-8 h-8', config.color)} />
+          <div
+            className="rounded-lg p-1"
+            style={{ background: `${config.hex}18` }}
+          >
+            <config.icon size={28} className={cn(config.color)} />
+          </div>
           <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-success border-2 border-card" />
         </div>
         <div>
           <div className="flex items-center gap-2">
             <span className="font-semibold text-foreground text-sm">{config.name}</span>
-            <span className="text-[10px] font-bold text-success border border-success/30 bg-success/10 px-1.5 py-px rounded uppercase tracking-wide">
+            <span
+              className="text-[10px] font-bold px-1.5 py-px rounded uppercase tracking-wide"
+              style={{ color: config.hex, border: `1px solid ${config.hex}50`, background: `${config.hex}15` }}
+            >
               Online
             </span>
           </div>
           <p className="text-xs text-muted-foreground">{config.dbType} AI Agent</p>
         </div>
         <div className="ml-auto">
-          <Sparkles className="w-4 h-4 text-muted-foreground" />
+          <Sparkles className="w-4 h-4" style={{ color: `${config.hex}80` }} />
         </div>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.map(msg => (
           <div key={msg.id} className={cn('flex gap-2', msg.role === 'user' && 'flex-row-reverse')}>
-            {msg.role === 'bot' && <Bot className={cn('w-5 h-5 shrink-0 mt-0.5', config.color)} />}
-            <div className={cn(
-              'max-w-[85%] rounded-xl px-3 py-2 text-sm leading-relaxed',
-              msg.role === 'bot'
-                ? 'bg-muted/50 border border-border/50 text-foreground'
-                : 'bg-brand-500 text-white'
-            )}>
-              {/* Basic markdown-like bold + italic */}
-              {msg.content.split(/(\*\*.*?\*\*|\*.*?\*)/g).map((part, i) =>
-                part.startsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong>
-                  : part.startsWith('*') ? <em key={i}>{part.slice(1, -1)}</em>
-                  : <span key={i}>{part}</span>
+            {msg.role === 'bot' && <config.icon size={20} className={cn('shrink-0 mt-0.5', config.color)} />}
+            <div className="flex flex-col gap-1.5 max-w-[85%]">
+
+              {/* Tool call chain — shown as subtle thought steps above the reply */}
+              {msg.toolCalls && msg.toolCalls.length > 0 && (
+                <div className="pl-3 border-l-2 border-brand-500/25 space-y-0.5 pb-1">
+                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} />)}
+                </div>
+              )}
+
+              {/* Message bubble */}
+              {(stripControlTokens(msg.content) || msg.role === 'user') && (
+                <div className={cn(
+                  'rounded-xl px-3 py-2 text-sm leading-relaxed',
+                  msg.role === 'bot'
+                    ? 'bg-muted/50 border border-border/50 text-foreground'
+                    : 'bg-brand-500 text-white'
+                )}>
+                  <MessageContent content={msg.content} />
+                </div>
               )}
             </div>
           </div>
         ))}
-        {sending && (
+
+        {/* Typing indicator — only while streaming with no content yet */}
+        {sending && messages[messages.length - 1]?.role === 'bot' && !messages[messages.length - 1]?.content && (
           <div className="flex gap-2">
-            <Bot className={cn('w-5 h-5 shrink-0 mt-0.5', config.color)} />
+            <config.icon size={20} className={cn('shrink-0 mt-0.5', config.color)} />
             <div className="bg-muted/50 border border-border/50 rounded-xl px-3 py-2">
               <span className="flex gap-1">
                 {[0, 1, 2].map(i => (
@@ -577,21 +382,59 @@ function ChatColumn({ botId }: { botId: BotId }) {
 }
 
 export default function ChatPage() {
+  const [activeBot, setActiveBot] = useState<BotId>('orabot')
+  const config = BOT_CONFIG[activeBot]
+
   return (
-    <div className="flex flex-col h-screen p-6 gap-4">
-      <div>
+    <div className="flex flex-col h-[calc(100vh-52px)] lg:h-screen px-3 py-3 sm:px-6 sm:py-6 gap-0">
+      {/* Page header — hidden on mobile (top bar already shows ADORS) */}
+      <div className="hidden sm:block mb-4">
         <h1 className="flex items-center gap-2 text-2xl font-bold text-foreground">
           <MessageCircle className="w-6 h-6 text-brand-400" />
           Bot Chat Hub
         </h1>
         <p className="text-muted-foreground text-sm mt-0.5">
-          AI-powered agents with live DB context — set GITHUB_TOKEN in API env to enable
+          AI-powered agents with live DB context and tool calling — requires DBA role or above
         </p>
       </div>
-      <div className="flex-1 grid grid-cols-3 gap-4 min-h-0">
-        <ChatColumn botId="orabot" />
-        <ChatColumn botId="msbot" />
-        <ChatColumn botId="marbot" />
+
+      {/* Tab bar */}
+      <div className="flex border-b border-border mb-0">
+        {(Object.entries(BOT_CONFIG) as [BotId, typeof config][]).map(([id, cfg]) => {
+          const isActive = activeBot === id
+          return (
+            <button
+              key={id}
+              onClick={() => setActiveBot(id)}
+              className={cn(
+                'flex items-center gap-2 flex-1 sm:flex-none justify-center sm:justify-start px-3 sm:px-5 py-2.5 text-sm font-medium rounded-t-lg border border-b-0 transition-all relative',
+                isActive
+                  ? 'bg-card text-foreground border-border -mb-px z-10'
+                  : 'bg-transparent text-muted-foreground border-transparent hover:text-foreground hover:bg-muted/30'
+              )}
+              style={isActive ? { borderTopColor: cfg.hex, borderTopWidth: 2 } : {}}
+            >
+              <cfg.icon size={16} className={isActive ? cfg.color : ''} />
+              <span className="text-xs sm:text-sm">{cfg.name}</span>
+              {/* dbType chip — desktop only */}
+              <span
+                className="hidden sm:inline text-[10px] font-bold px-1.5 py-px rounded uppercase tracking-wide"
+                style={{
+                  color:      isActive ? cfg.hex : undefined,
+                  border:     isActive ? `1px solid ${cfg.hex}50` : '1px solid transparent',
+                  background: isActive ? `${cfg.hex}15` : 'transparent',
+                }}
+              >
+                {cfg.dbType}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Active bot — full width */}
+      <div className="flex-1 min-h-0 border border-t-0 border-border rounded-b-xl rounded-tr-xl overflow-hidden">
+        <ChatColumn key={activeBot} botId={activeBot} />
       </div>
     </div>
   )
