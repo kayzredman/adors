@@ -1,46 +1,119 @@
 /**
  * Oracle live adapter using the `oracledb` driver.
  *
- * Thin mode (default): no Instant Client needed, but requires Oracle DB 12.1+.
- * Thick mode: set ORACLE_THICK_CLIENT=true + ORACLE_LIB_DIR in .env.
- *             Required for Oracle 11g and below.
+ * Thin mode (default): no Instant Client needed, requires Oracle DB 12.1+.
+ * Thick mode: auto-detected when thin fails with NJS-138 (Oracle 11g/older).
+ *   Searches common Oracle Client / Instant Client install paths on Windows.
+ *   Override with ORACLE_THICK_CLIENT=true and optional ORACLE_LIB_DIR.
  */
 
+import { existsSync, readdirSync } from 'fs'
+import { join } from 'path'
 import type { DbAdapter, DbCredentials } from './types.js'
 
-// initOracleClient() may be called at most once per Node process.
-let _thickInitDone = false
+// initOracleClient() may only be called once per Node process.
+let _thickInitDone  = false
+let _thickAvailable: boolean | null = null   // null = not yet probed
 
-function ensureThickInit(oracledb: typeof import('oracledb')) {
-  if (_thickInitDone) return
-  const libDir = process.env.ORACLE_LIB_DIR
-  oracledb.initOracleClient(libDir ? { libDir } : undefined)
-  _thickInitDone = true
+function findOracleClientDir(): string | undefined {
+  // Explicit override wins
+  if (process.env.ORACLE_LIB_DIR) return process.env.ORACLE_LIB_DIR
+
+  // Common Windows paths — Instant Client ZIPs, full Oracle Client, Oracle DB
+  const candidates: string[] = []
+
+  // ORACLE_HOME env (traditional full client / Oracle DB itself)
+  if (process.env.ORACLE_HOME) candidates.push(join(process.env.ORACLE_HOME, 'bin'))
+
+  // Instant Client extracted to common roots
+  for (const root of ['C:\\oracle', 'C:\\Oracle', 'C:\\app']) {
+    if (!existsSync(root)) continue
+    try {
+      for (const sub of readdirSync(root)) {
+        const p = join(root, sub)
+        if (sub.toLowerCase().includes('instantclient') ||
+            sub.toLowerCase().includes('client')) {
+          candidates.push(p)
+        }
+        // Oracle DB ORACLE_HOME style: C:\app\user\product\19\dbhome_1\bin
+        const bin = join(p, 'bin')
+        if (existsSync(bin)) candidates.push(bin)
+      }
+    } catch { /* skip unreadable */ }
+  }
+
+  // Find first directory that contains oci.dll (Windows) or libclntsh.so (Linux)
+  for (const dir of candidates) {
+    if (existsSync(join(dir, 'oci.dll')) || existsSync(join(dir, 'libclntsh.so'))) {
+      return dir
+    }
+  }
+  return undefined
 }
 
-async function loadOracledb(): Promise<typeof import('oracledb')> {
+function ensureThickInit(oracledb: typeof import('oracledb')): boolean {
+  if (_thickInitDone) return true
+  const libDir = findOracleClientDir()
+  try {
+    oracledb.initOracleClient(libDir ? { libDir } : undefined)
+    _thickInitDone  = true
+    _thickAvailable = true
+    console.log(`[oracleAdapter] Thick mode enabled${libDir ? ` (${libDir})` : ' (PATH)'}`)
+    return true
+  } catch (e: any) {
+    _thickAvailable = false
+    console.warn(`[oracleAdapter] Thick mode init failed: ${e.message}`)
+    return false
+  }
+}
+
+async function loadOracledb(forceThick = false): Promise<typeof import('oracledb')> {
   const mod = await import('oracledb').catch(() => {
     throw new Error('oracledb package not installed. Run: pnpm add oracledb')
   })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const oracledb: typeof import('oracledb') = (mod as any).default ?? mod
-  if (process.env.ORACLE_THICK_CLIENT === 'true') {
+  if (forceThick || process.env.ORACLE_THICK_CLIENT === 'true') {
     ensureThickInit(oracledb)
   }
   return oracledb
 }
 
+/** Connect, auto-upgrading to thick mode on NJS-138. */
+async function getOracleConnection(creds: DbCredentials): Promise<any> {
+  const oracledb = await loadOracledb()
+  const connParams = {
+    user:          creds.username,
+    password:      creds.password,
+    connectString: `${creds.host}:${creds.port}/${creds.database}`,
+    ...(creds.options?.['privilege'] === 'SYSDBA'  ? { privilege: oracledb.SYSDBA  } : {}),
+    ...(creds.options?.['privilege'] === 'SYSOPER' ? { privilege: oracledb.SYSOPER } : {}),
+  }
+
+  try {
+    return await oracledb.getConnection(connParams)
+  } catch (err: any) {
+    // NJS-138 = thin mode + Oracle 11g (or older) — auto-retry with thick mode
+    if (err.message?.includes('NJS-138') || err.errorNum === 138) {
+      console.log(`[oracleAdapter] NJS-138 detected for ${creds.host} — trying thick mode auto-detect`)
+      const ok = ensureThickInit(oracledb)
+      if (!ok || _thickAvailable === false) {
+        throw new Error(
+          'Oracle 11g requires Oracle Instant Client (thick mode). ' +
+          'Install Instant Client from https://www.oracle.com/database/technologies/instant-client/winx64-64-downloads.html ' +
+          'then set ORACLE_LIB_DIR=<install path> in apps/api/.env and restart the API.'
+        )
+      }
+      // Thick init succeeded — retry the connection
+      return await oracledb.getConnection(connParams)
+    }
+    throw err
+  }
+}
+
 export class OracleAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
-    const oracledb = await loadOracledb()
-
-    const conn = await oracledb.getConnection({
-      user:          creds.username,
-      password:      creds.password,
-      connectString: `${creds.host}:${creds.port}/${creds.database}`,
-      ...(creds.options?.['privilege'] === 'SYSDBA'  ? { privilege: oracledb.SYSDBA  } : {}),
-      ...(creds.options?.['privilege'] === 'SYSOPER' ? { privilege: oracledb.SYSOPER } : {}),
-    })
+    const conn = await getOracleConnection(creds)
 
     try {
       const [
@@ -131,16 +204,9 @@ export class OracleAdapter implements DbAdapter {
   }
 
   async testConnection(creds: DbCredentials): Promise<{ ok: boolean; latency_ms: number }> {
-    const oracledb = await loadOracledb()
     const start = Date.now()
     try {
-      const conn = await oracledb.getConnection({
-        user:          creds.username,
-        password:      creds.password,
-        connectString: `${creds.host}:${creds.port}/${creds.database}`,
-        ...(creds.options?.['privilege'] === 'SYSDBA'  ? { privilege: oracledb.SYSDBA  } : {}),
-        ...(creds.options?.['privilege'] === 'SYSOPER' ? { privilege: oracledb.SYSOPER } : {}),
-      })
+      const conn = await getOracleConnection(creds)
       await conn.execute('SELECT 1 FROM DUAL')
       await conn.close()
       return { ok: true, latency_ms: Date.now() - start }

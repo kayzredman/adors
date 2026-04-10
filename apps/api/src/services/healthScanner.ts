@@ -335,13 +335,9 @@ export async function scanConnection(conn: DbConnection): Promise<HealthSnapshot
     // Write a real critical snapshot — DBA must see this, not mock green data
     console.error(`[healthScanner] Live scan failed for ${conn.name}: ${err.message}`)
 
-    // NJS-138: thin mode does not support Oracle 11g — give an actionable message
+    // NJS-138: thin mode does not support Oracle 11g — adapter auto-retries with thick mode,
+    // but if Instant Client is not installed that retry also fails with a clear message.
     let errorMsg: string = err.message
-    if (err.message?.includes('NJS-138') || err.errorNum === 138) {
-      errorMsg = 'NJS-138: This Oracle server version (11g or older) requires Thick mode. ' +
-        'Install Oracle Instant Client, then set ORACLE_THICK_CLIENT=true and ' +
-        'ORACLE_LIB_DIR=<path> in apps/api/.env and restart the API.'
-    }
 
     metrics = {
       score:            0,
