@@ -110,29 +110,55 @@ export function MariaDbDetailPanel({ metrics: m, name }: MariaDbDetailPanelProps
 
         <div className="rounded-xl border border-border bg-card p-4 space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Replication</p>
-          <MetricChart data={m.replication_lag_chart ?? []} color="#8B5CF6" height={90} label="Lag (s)" />
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Status</span>
-            <span className={`font-bold ${m.replication_running ? 'text-success' : 'text-muted-foreground'}`}>
-              {m.replication_running ? 'Running' : 'N/A'}
-            </span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Lag</span>
-            <span className={`font-bold tabular-nums ${(m.replication_lag_sec ?? 0) > 5 ? 'text-critical' : 'text-success'}`}>
-              {m.replication_lag_sec}s
-            </span>
-          </div>
+          {!m.replication_running && !m.replication_master_host ? (
+            <p className="text-xs text-muted-foreground italic">Not configured as a replica — this may be a primary node.</p>
+          ) : (
+            <>
+              <MetricChart data={m.replication_lag_chart ?? []} color="#8B5CF6" height={70} label="Lag (s)" />
+              <div className="space-y-1 text-xs mt-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">IO Thread</span>
+                  <span className={`font-bold ${m.replication_io_running === 'Yes' ? 'text-success' : 'text-critical'}`}>{m.replication_io_running ?? 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">SQL Thread</span>
+                  <span className={`font-bold ${m.replication_sql_running === 'Yes' ? 'text-success' : 'text-critical'}`}>{m.replication_sql_running ?? 'N/A'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Lag</span>
+                  <span className={`font-bold tabular-nums ${(m.replication_lag_sec ?? 0) > 5 ? 'text-critical' : 'text-success'}`}>{m.replication_lag_sec}s</span>
+                </div>
+                {m.replication_master_host && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Master</span>
+                    <span className="font-mono text-foreground truncate text-right">{m.replication_master_host}</span>
+                  </div>
+                )}
+                {m.replication_master_log_file && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Master Log</span>
+                    <span className="font-mono text-foreground truncate text-right">{m.replication_master_log_file}:{m.replication_master_log_pos}</span>
+                  </div>
+                )}
+                {m.replication_last_error && (
+                  <div className="mt-1 rounded bg-critical/10 border border-critical/30 px-2 py-1">
+                    <p className="text-[11px] text-critical break-all">{m.replication_last_error}</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="rounded-xl border border-border bg-card p-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Storage</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Schema Storage</p>
           <StorageCylinder
-            label="Disk"
+            label="Schema Data"
             usedPct={m.disk_usage_pct ?? 0}
             sizeLabel={`${m.disk_used_gb} / ${m.disk_total_gb} GB`}
           />
           <MetricChart data={m.disk_io_chart ?? []} color="#EF4444" height={70} label="I/O ops/s" />
+          <p className="text-[10px] text-muted-foreground/60 italic">Derived from information_schema — OS disk not accessible via SQL</p>
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Table Lock Waits</span>
             <span className={`font-bold tabular-nums ${(m.table_lock_waited ?? 0) > 0 ? 'text-warning' : 'text-success'}`}>

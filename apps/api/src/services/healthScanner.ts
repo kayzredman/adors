@@ -115,6 +115,15 @@ function mockOracleHealth(conn: DbConnection): HealthMetrics {
       tablespace_usage_pct:  tablespacePct,
       redo_log_switches_hr:  Math.floor(Math.random() * 20),
       sga_hit_ratio_pct:     Math.floor(Math.random() * 10) + 90,
+      // ── Tablespace utilization (disk_mounts) ─────
+      disk_mounts: [
+        { mount: 'SYSTEM',     total_gb: 0.89, used_gb: 0.87, free_gb: 0.02, used_pct: 97.8 },
+        { mount: 'SYSAUX',     total_gb: 1.20, used_gb: 0.98, free_gb: 0.22, used_pct: 81.7 },
+        { mount: 'USERS',      total_gb: 20.0, used_gb: +(tablespacePct / 100 * 20).toFixed(2), free_gb: +(20 - tablespacePct / 100 * 20).toFixed(2), used_pct: tablespacePct },
+        { mount: 'UNDOTBS1',   total_gb: 32.0, used_gb: 4.2,  free_gb: 27.8, used_pct: 13.1 },
+        { mount: 'TEMP',       total_gb: 10.0, used_gb: 1.4,  free_gb: 8.6,  used_pct: 14.0 },
+        { mount: 'AUDIT_DATA', total_gb: 5.0,  used_gb: 2.1,  free_gb: 2.9,  used_pct: 42.0 },
+      ],
     },
   }
 }
@@ -226,9 +235,16 @@ function mockMariaDbHealth(conn: DbConnection): HealthMetrics {
       long_query_time_sec:      2,
       slow_query_chart:         timeSeries(2, 4),
       // ── Replication ───────────────────────────────
-      replication_running:    isProd,
-      replication_lag_sec:    conn.environment === 'production' ? 0 : Math.floor(Math.random() * 3),
-      replication_lag_chart:  timeSeries(0.5, 2),
+      replication_running:         isProd,
+      replication_io_running:      isProd ? 'Yes' : 'No',
+      replication_sql_running:     isProd ? 'Yes' : 'No',
+      replication_lag_sec:         conn.environment === 'production' ? 0 : Math.floor(Math.random() * 3),
+      replication_lag_chart:       timeSeries(0.5, 2),
+      replication_master_host:     isProd ? 'prod-mar-primary.internal' : null,
+      replication_master_log_file: isProd ? `binlog.0001${Math.floor(Math.random() * 40) + 80}` : null,
+      replication_master_log_pos:  isProd ? Math.floor(Math.random() * 1000000) + 500000 : null,
+      replication_relay_log_file:  isProd ? `relay-bin.000042` : null,
+      replication_last_error:      null,
       // ── Storage ──────────────────────────────────
       disk_usage_pct:       Math.floor(Math.random() * 30) + 40,
       disk_used_gb:         Math.floor(Math.random() * 200) + 100,

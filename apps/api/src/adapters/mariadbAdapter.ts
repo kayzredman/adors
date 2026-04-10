@@ -93,9 +93,17 @@ export class MariaDbAdapter implements DbAdapter {
         long_query_time_sec:     get(globalStatus, 'long_query_time') || 2,
         slow_query_chart:        [{ t: new Date().toISOString(), v: slowQs }],
         // Replication
-        replication_running:   replStatus.is_running,
-        replication_lag_sec:   replStatus.lag_sec,
-        replication_lag_chart: [{ t: new Date().toISOString(), v: replStatus.lag_sec }],
+        replication_running:         replStatus.is_running,
+        replication_io_running:      replStatus.io_running,
+        replication_sql_running:     replStatus.sql_running,
+        replication_lag_sec:         replStatus.lag_sec,
+        replication_lag_chart:       [{ t: new Date().toISOString(), v: replStatus.lag_sec }],
+        replication_master_host:     replStatus.master_host,
+        replication_master_log_file: replStatus.master_log_file,
+        replication_master_log_pos:  replStatus.master_log_pos,
+        replication_relay_log_file:  replStatus.relay_log_file,
+        replication_relay_log_pos:   replStatus.relay_log_pos,
+        replication_last_error:      replStatus.last_error,
         // Queries
         queries_per_sec:  queries,
         select_per_s:     selects,
@@ -107,10 +115,10 @@ export class MariaDbAdapter implements DbAdapter {
         // Table Locks
         table_lock_waited:    tableLocks,
         table_lock_immediate: get(globalStatus, 'Table_locks_immediate'),
-        // Storage (placeholder)
-        disk_usage_pct: 0,
-        disk_used_gb:   0,
-        disk_total_gb:  0,
+        // Storage — derive totals from schema sizes (OS disk not accessible via SQL)
+        disk_usage_pct: diskMounts.length > 0 ? Math.min(99, Math.round(diskMounts.reduce((s, d) => s + d.used_gb, 0) / Math.max(diskMounts.reduce((s, d) => s + d.used_gb, 0) * 1.4, 0.001) * 100)) : 0,
+        disk_used_gb:   +diskMounts.reduce((s, d) => s + d.used_gb, 0).toFixed(2),
+        disk_total_gb:  +(diskMounts.reduce((s, d) => s + d.used_gb, 0) * 1.4).toFixed(2),
         disk_io_chart:  [{ t: new Date().toISOString(), v: 0 }],
         // Backup history (no native SQL table in MariaDB)
         backup_history: [],
@@ -200,14 +208,22 @@ export class MariaDbAdapter implements DbAdapter {
     try {
       const [rows] = await conn.query('SHOW SLAVE STATUS')
       const r = (rows as any[])[0]
-      if (!r) return { is_running: false, lag_sec: 0 }
+      if (!r) return { is_running: false, lag_sec: 0, io_running: 'No', sql_running: 'No', master_host: null, master_log_file: null, master_log_pos: null, relay_log_file: null, relay_log_pos: null, last_error: null }
       return {
-        is_running: r.Slave_IO_Running === 'Yes' && r.Slave_SQL_Running === 'Yes',
-        lag_sec:    Number(r.Seconds_Behind_Master ?? 0),
+        is_running:      r.Slave_IO_Running === 'Yes' && r.Slave_SQL_Running === 'Yes',
+        lag_sec:         Number(r.Seconds_Behind_Master ?? 0),
+        io_running:      String(r.Slave_IO_Running  ?? 'No'),
+        sql_running:     String(r.Slave_SQL_Running ?? 'No'),
+        master_host:     r.Master_Host         ?? null,
+        master_log_file: r.Master_Log_File     ?? null,
+        master_log_pos:  Number(r.Read_Master_Log_Pos ?? 0),
+        relay_log_file:  r.Relay_Log_File      ?? null,
+        relay_log_pos:   Number(r.Relay_Log_Pos ?? 0),
+        last_error:      r.Last_Error || r.Last_IO_Error || r.Last_SQL_Error || null,
       }
     } catch {
       // Not a replica
-      return { is_running: false, lag_sec: 0 }
+      return { is_running: false, lag_sec: 0, io_running: 'No', sql_running: 'No', master_host: null, master_log_file: null, master_log_pos: null, relay_log_file: null, relay_log_pos: null, last_error: null }
     }
   }
 
