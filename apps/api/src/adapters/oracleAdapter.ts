@@ -51,53 +51,73 @@ export class OracleAdapter implements DbAdapter {
       ])
 
       return {
+        adapter: 'live',
+        // Server Info
         db_version:  dbProps.version,
         uptime_days: dbProps.uptime_days,
-        clients: {
-          num_clients:    sessions.active,
-          avg_response_ms: sysstat.avg_response_ms,
-          network_in_kbs:  sysstat.net_in,
-          network_out_kbs: sysstat.net_out,
-        },
-        sessions: {
-          current:     sessions.current,
-          active:      sessions.active,
-          inactive:    sessions.inactive,
-          blocked:     sessions.blocked,
-          chart:       sessions.chart,
-        },
-        processes,
-        execution_rate:  sysstat.execution_rate,
-        parse_rate:      sysstat.parse_rate,
-        open_cursors:    sysstat.open_cursors,
-        commit_rate:     sysstat.commit_rate,
-        waits: {
-          chart:     waits.chart,
-          breakdown: waits.breakdown,
-        },
-        db_cpu_ratio: sysstat.db_cpu_ratio,
-        memory: {
-          sga_alloc_mb:     sga.total_mb,
-          buffer_cache_mb:  sga.buffer_cache_mb,
-          shared_pool_mb:   sga.shared_pool_mb,
-          large_pool_mb:    sga.large_pool_mb,
-          redo_buffer_mb:   sga.redo_buffer_mb,
-          db_block_rate:    sysstat.db_block_rate_chart,
-          logical_reads:    sysstat.logical_reads_chart,
-          redo_generated:   sysstat.redo_generated_chart,
-        },
-        storage: {
-          data:  tablespaces.data,
-          temp:  tablespaces.temp,
-          undo:  tablespaces.undo,
-          io_chart: tablespaces.io_chart,
-        },
-        redo_log: {
-          current_group: redoLog.current_group,
-          used_pct:      redoLog.used_pct,
-          fill_chart:    redoLog.fill_chart,
-          log_counts:    redoLog.log_counts,
-        },
+        os:          'Linux x86_64',
+        cpus:        0,
+        // Clients
+        num_clients:     sessions.active,
+        avg_response_ms: sysstat.avg_response_ms,
+        network_in_kbs:  sysstat.net_in,
+        network_out_kbs: sysstat.net_out,
+        // Sessions (flat keys matching mock)
+        sessions_active:   sessions.active,
+        sessions_inactive: sessions.inactive,
+        sessions_blocked:  sessions.blocked,
+        sessions_total:    sessions.current,
+        sessions_chart:    sessions.chart,
+        // Processes (flat keys from processes array)
+        num_dispatchers:       processes.find((p: any) => p.name?.includes('D0'))?.count ?? 1,
+        num_shared_servers:    processes.find((p: any) => p.name?.includes('S0'))?.count ?? 0,
+        num_dedicated_servers: sessions.current,
+        num_parallel_servers:  0,
+        num_busy_parallel:     0,
+        num_job_servers:       0,
+        // Execution rates (single-point charts)
+        execution_rate_chart:  sysstat.execution_rate,
+        parse_rate_chart:      sysstat.parse_rate,
+        open_cursors_chart:    sysstat.open_cursors,
+        commit_rate_chart:     sysstat.commit_rate,
+        // Waits
+        waits_chart:    waits.chart,
+        wait_breakdown: waits.breakdown,
+        // DB CPU
+        db_cpu_ratio_pct: 0,
+        db_cpu_chart:     [{ t: new Date().toISOString(), v: 0 }],
+        // Memory
+        db_block_rate_chart:   sysstat.db_block_rate_chart,
+        logical_reads_chart:   sysstat.logical_reads_chart,
+        redo_generated_chart:  sysstat.redo_generated_chart,
+        sga_currently_used_gb: (sga.total_mb / 1024).toFixed(1),
+        sga_maximum_size_gb:   (sga.total_mb / 1024).toFixed(1),
+        buffer_cache_size_gb:  (sga.buffer_cache_mb / 1024).toFixed(1),
+        redo_log_buffers_mb:   sga.redo_buffer_mb,
+        shared_pool_size_gb:   (sga.shared_pool_mb / 1024).toFixed(1),
+        large_pool_size_mb:    sga.large_pool_mb,
+        // Storage
+        storage_data_pct:  tablespaces.data?.used_pct ?? 0,
+        storage_data_tb:   ((tablespaces.data?.used_gb ?? 0) / 1024).toFixed(1),
+        storage_temp_pct:  tablespaces.temp?.used_pct ?? 0,
+        storage_temp_gb:   tablespaces.temp?.used_gb ?? 0,
+        storage_undo_pct:  tablespaces.undo?.used_pct ?? 0,
+        storage_undo_gb:   tablespaces.undo?.used_gb ?? 0,
+        storage_io_chart:  tablespaces.io_chart,
+        tablespace_usage_pct: tablespaces.data?.used_pct ?? 0,
+        // Redo Log
+        redo_log_group:       redoLog.current_group ? `#${redoLog.current_group}` : null,
+        redo_log_used_pct:    redoLog.used_pct,
+        redo_log_size_gb:     0,
+        redo_log_fill_chart:  redoLog.fill_chart,
+        redo_log_sequence:    0,
+        log_count_current:    redoLog.log_counts['CURRENT']  ?? 0,
+        log_count_active:     redoLog.log_counts['ACTIVE']   ?? 0,
+        log_count_inactive:   redoLog.log_counts['INACTIVE'] ?? 0,
+        log_count_cleaning:   redoLog.log_counts['CLEARING'] ?? 0,
+        log_count_unused:     redoLog.log_counts['UNUSED']   ?? 0,
+        redo_log_switches_hr: 0,
+        sga_hit_ratio_pct:    0,
       }
     } finally {
       await conn.close()

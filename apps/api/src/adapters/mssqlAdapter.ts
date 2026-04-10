@@ -8,9 +8,11 @@ import type { DbAdapter, DbCredentials } from './types.js'
 
 export class MssqlAdapter implements DbAdapter {
   async getHealthMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
-    const mssql = await import('mssql').catch(() => {
+    const mssqlMod = await import('mssql').catch(() => {
       throw new Error('mssql package not installed. Run: pnpm add mssql')
     })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mssql: typeof import('mssql') = (mssqlMod as any).default ?? mssqlMod
 
     const pool = await mssql.connect({
       user:     creds.username,
@@ -19,7 +21,7 @@ export class MssqlAdapter implements DbAdapter {
       port:     creds.port,
       database: creds.database,
       options: {
-        trustServerCertificate: true,   // accepted for internal/UAT boxes
+        trustServerCertificate: true,
         encrypt: false,
         ...((creds.options ?? {}) as any),
       },
@@ -37,34 +39,70 @@ export class MssqlAdapter implements DbAdapter {
         this.#queryCpuIo(pool),
       ])
 
+      // Return flat keys matching mock adapter shape (MssqlDetailPanel reads these directly)
       return {
-        db_version:    version.product_version,
+        adapter: 'live',
+        db_version:                version.product_version,
+        uptime_days:               version.uptime_days,
+        os:                        version.os,
+        cpus:                      version.cpus,
+        // Connections
+        active_connections:        sessions.active,
+        max_connections:           sessions.max_allowed,
+        connection_chart:          sessions.chart,
+        // Memory
+        buffer_pool_memory_pct:    memory.buffer_pool_pct,
+        target_server_memory_gb:   memory.target_gb,
+        total_server_memory_gb:    memory.current_gb,
+        page_life_expectancy_sec:  memory.ple,
+        memory_pressure_chart:     memory.chart,
+        // Waits
+        top_wait_types:            waits.top,
+        // Blocking
+        blocking_spids:            blocking.count,
+        blocking_chart:            blocking.chart,
+        deadlocks_per_min:         cpuIo.deadlocks,
+        // Query perf
+        batch_requests_sec:        cpuIo.batch_req_per_s,
+        avg_query_time_ms:         cpuIo.avg_exec_ms,
+        cpu_usage_pct:             cpuIo.cpu_pct,
+        compilations_sec:          cpuIo.compilations,
+        recompilations_sec:        cpuIo.recompilations,
+        cpu_chart:                 cpuIo.cpu_chart,
+        query_perf_chart:          cpuIo.cpu_chart,
+        // Disk I/O
+        disk_reads_per_sec:        cpuIo.disk_io.reads_per_s,
+        disk_writes_per_sec:       cpuIo.disk_io.writes_per_s,
+        io_chart:                  cpuIo.disk_io.io_chart,
+        // Log (placeholder — requires additional query)
+        log_flush_per_sec:         0,
+        log_cache_hit_pct:         0,
+
+        // Legacy nested shape kept for backwards compatibility
         connections: {
-          active:        sessions.active,
-          max_allowed:   sessions.max_allowed,
-          chart:         sessions.chart,
+          active:          sessions.active,
+          max_allowed:     sessions.max_allowed,
+          chart:           sessions.chart,
           batch_req_per_s: cpuIo.batch_req_per_s,
         },
-        memory: {
-          buffer_pool_pct:   memory.buffer_pool_pct,
-          target_gb:         memory.target_gb,
-          current_gb:        memory.current_gb,
+        memory_nested: {
+          buffer_pool_pct:      memory.buffer_pool_pct,
+          target_gb:            memory.target_gb,
+          current_gb:           memory.current_gb,
           page_life_expectancy: memory.ple,
-          chart:             memory.chart,
-          pressure_hist:     memory.pressure_hist,
-        },
-        top_wait_types:  waits.top,
-        blocking_spids:  blocking.count,
-        blocking_chart:  blocking.chart,
-        deadlocks_per_min: cpuIo.deadlocks,
-        query_perf: {
-          avg_exec_ms:       cpuIo.avg_exec_ms,
-          cpu_pct:           cpuIo.cpu_pct,
-          batch_req_per_s:   cpuIo.batch_req_per_s,
-          compilations_per_s: cpuIo.compilations,
-          chart:             cpuIo.cpu_chart,
+          chart:                memory.chart,
+          pressure_hist:        memory.pressure_hist,
         },
         disk_io: cpuIo.disk_io,
+
+        // --- unused below, kept to avoid breaking query_perf block ---
+        query_perf: {
+          avg_exec_ms:        cpuIo.avg_exec_ms,
+          cpu_pct:            cpuIo.cpu_pct,
+          batch_req_per_s:    cpuIo.batch_req_per_s,
+          compilations_per_s: cpuIo.compilations,
+          chart:              cpuIo.cpu_chart,
+        },
       }
     } finally {
       await pool.close()
@@ -72,7 +110,9 @@ export class MssqlAdapter implements DbAdapter {
   }
 
   async testConnection(creds: DbCredentials): Promise<{ ok: boolean; latency_ms: number }> {
-    const mssql = await import('mssql')
+    const mssqlMod = await import('mssql')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mssql: typeof import('mssql') = (mssqlMod as any).default ?? mssqlMod
     const start = Date.now()
     let pool: any
     try {
@@ -89,8 +129,26 @@ export class MssqlAdapter implements DbAdapter {
   // ─── Query helpers ─────────────────────────────────────────────────────────
 
   async #queryVersion(pool: any) {
-    const r = await pool.request().query(`SELECT @@VERSION AS v, SERVERPROPERTY('ProductVersion') AS pv`)
-    return { product_version: String(r.recordset[0]?.pv ?? 'unknown') }
+    const r = await pool.request().query(`
+      SELECT
+        SERVERPROPERTY('ProductVersion') AS pv,
+        SERVERPROPERTY('Edition') AS ed,
+        @@CPU_COUNT AS cpus,
+        (SELECT sqlserver_start_time FROM sys.dm_os_sys_info) AS start_time,
+        @@VERSION AS full_ver
+    `)
+    const row = r.recordset[0] ?? {}
+    const startTime  = row.start_time ? new Date(row.start_time) : null
+    const uptimeDays = startTime ? Math.floor((Date.now() - startTime.getTime()) / 86400000) : 0
+    const fullVer    = String(row.full_ver ?? '')
+    // Extract OS from @@VERSION string (e.g. "on Windows Server 2019")
+    const osMatch    = fullVer.match(/on\s+(.+?)\s*(?:\n|$)/i)
+    return {
+      product_version: String(row.pv ?? 'unknown'),
+      uptime_days:     uptimeDays,
+      os:              osMatch ? osMatch[1].trim() : 'Windows Server',
+      cpus:            Number(row.cpus ?? 0),
+    }
   }
 
   async #queryMemory(pool: any) {
