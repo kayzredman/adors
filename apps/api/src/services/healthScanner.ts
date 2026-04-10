@@ -386,24 +386,56 @@ export async function triggerManualScan(conn: DbConnection): Promise<HealthSnaps
   return scanConnection(conn)
 }
 
-// Maximum concurrent DB scans per run. Keeps the Supabase connection pool
+// Maximum concurrent DB scans per batch. Keeps the Supabase connection pool
 // free for live user traffic even when the fleet is large.
 const SCAN_BATCH_SIZE = 3
 
-export async function scanAllConnections(): Promise<void> {
+/**
+ * Scan all active connections, optionally filtered to specific health statuses.
+ *
+ * Called by two BullMQ jobs:
+ *   priority-scan  (every 1 min)  → statuses: ['critical', 'warning']
+ *   routine-scan   (every 3 min)  → statuses: ['healthy']
+ *
+ * The two-tier approach means a connection that just turned critical is
+ * re-evaluated within 60 seconds — fast enough for mission-critical alerting —
+ * while steady healthy connections only consume scan budget every 3 minutes.
+ */
+export async function scanAllConnections(
+  statuses: string[] = ['critical', 'warning', 'healthy'],
+): Promise<void> {
+  // Map health statuses → latest health_snapshot status, but we need to
+  // filter on the connections themselves. We join via the last snapshot.
+  // Simplest approach: always pull active connections then filter client-side
+  // on the last known status from the snapshot (already present in connections.status
+  // if we keep it in sync) — or fetch all and skip non-matching.
+  //
+  // Because health_snapshots.status is written per connection on each scan,
+  // we query connections joined to their latest snapshot status.
   const { data: connections, error } = await supabase
     .from('connections')
-    .select('*')
+    .select('*, health_snapshots(status, scored_at)')
     .eq('status', 'active')
+    .order('scored_at', { referencedTable: 'health_snapshots', ascending: false })
+    .limit(1, { referencedTable: 'health_snapshots' })
 
   if (error || !connections || connections.length === 0) return
 
-  // Process in fixed-size batches — never more than SCAN_BATCH_SIZE live
-  // adapter calls + Supabase writes happening simultaneously.
-  for (let i = 0; i < connections.length; i += SCAN_BATCH_SIZE) {
-    const batch = connections.slice(i, i + SCAN_BATCH_SIZE)
+  // Filter to connections whose latest snapshot status matches the requested tier.
+  // New connections with no snapshot yet always fall through to the priority tier.
+  const targets = connections.filter((conn: any) => {
+    const latestStatus = conn.health_snapshots?.[0]?.status ?? 'critical'
+    return statuses.includes(latestStatus)
+  })
+
+  if (targets.length === 0) return
+
+  // Process in fixed-size batches — never more than SCAN_BATCH_SIZE
+  // live adapter calls + Supabase writes in flight simultaneously.
+  for (let i = 0; i < targets.length; i += SCAN_BATCH_SIZE) {
+    const batch = targets.slice(i, i + SCAN_BATCH_SIZE)
     await Promise.allSettled(
-      batch.map((conn) => scanConnection(conn as DbConnection)),
+      batch.map((conn: any) => scanConnection(conn as DbConnection)),
     )
   }
 }

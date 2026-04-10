@@ -24,9 +24,10 @@ export const healthScanQueue = new Queue('health-scan', {
 // exactly once regardless of worker count.
 
 const SCHEDULER_LOCK_KEY  = 'adors:scheduler:leader'
-// TTL = 6 minutes — slightly longer than the cron interval so the lock expires
-// naturally if the leader process dies without releasing it.
-const SCHEDULER_LOCK_TTL_MS = 6 * 60 * 1000
+// TTL = 90 seconds — 1.5× the fastest scan interval (1 min).
+// If the leader dies without releasing, a new election happens within 90s,
+// at most missing one scan cycle before the new leader takes over.
+const SCHEDULER_LOCK_TTL_MS = 90 * 1000
 
 let lockRenewalTimer: ReturnType<typeof setInterval> | null = null
 
@@ -46,7 +47,7 @@ export async function startHealthScanScheduler(): Promise<void> {
 
   console.log(`[worker] Elected scheduler leader (pid ${pid})`)
 
-  // Renew the lock every 3 minutes so it doesn't expire while we're alive.
+  // Renew every 40s — well within the 90s TTL.
   lockRenewalTimer = setInterval(async () => {
     // Only renew if we still own the lock (value matches our pid).
     const owner = await redis.get(SCHEDULER_LOCK_KEY)
@@ -58,7 +59,7 @@ export async function startHealthScanScheduler(): Promise<void> {
       lockRenewalTimer = null
       console.warn('[worker] Lost scheduler lock — another instance took over')
     }
-  }, 3 * 60 * 1000)
+  }, 40 * 1000)
 
   // Clean up any stale repeatable jobs before registering ours (idempotent).
   const repeatableJobs = await healthScanQueue.getRepeatableJobs()
@@ -66,14 +67,23 @@ export async function startHealthScanScheduler(): Promise<void> {
     repeatableJobs.map((job) => healthScanQueue.removeRepeatableByKey(job.key)),
   )
 
-  // Add the single authoritative repeatable job.
+  // Two-tier priority scanning:
+  // • critical/warning connections — every 1 minute (catch active incidents fast)
+  // • healthy connections          — every 3 minutes (steady state, lower DB load)
+  // Both jobs are handled in the BullMQ worker by scanAllConnections(), which
+  // filters by status before scanning so each tier only touches the right rows.
   await healthScanQueue.add(
-    'full-fleet-scan',
-    {},
-    { repeat: { pattern: '*/5 * * * *' } },
+    'priority-scan',
+    { statuses: ['critical', 'warning'] },
+    { repeat: { pattern: '* * * * *' } },
+  )
+  await healthScanQueue.add(
+    'routine-scan',
+    { statuses: ['healthy'] },
+    { repeat: { pattern: '*/3 * * * *' } },
   )
 
-  console.log('[worker] Health scan scheduler started — every 5 minutes')
+  console.log('[worker] Health scan scheduler started — priority: 1min | routine: 3min')
 }
 
 export async function releaseSchedulerLock(): Promise<void> {
@@ -105,10 +115,11 @@ export function createHealthScanWorker(): Worker {
   const worker = new Worker(
     'health-scan',
     async (job) => {
-      if (job.name === 'full-fleet-scan') {
-        console.log(`[worker] Running full fleet health scan — ${new Date().toISOString()}`)
-        await scanAllConnections()
-        return { scanned: true, at: new Date().toISOString() }
+      if (job.name === 'priority-scan' || job.name === 'routine-scan') {
+        const statuses: string[] = job.data.statuses ?? ['critical', 'warning', 'healthy']
+        console.log(`[worker] ${job.name} — statuses: ${statuses.join(', ')} — ${new Date().toISOString()}`)
+        await scanAllConnections(statuses)
+        return { scanned: true, statuses, at: new Date().toISOString() }
       }
 
       if (job.name === 'single-scan' && job.data.connectionId) {
