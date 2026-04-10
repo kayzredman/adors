@@ -9,6 +9,7 @@ import {
   BookOpen,
   FlaskConical,
   Database,
+  BarChart2,
   Moon,
   Sun,
   LogOut,
@@ -20,6 +21,7 @@ import { createClient } from '@/lib/supabase/browser'
 
 const NAV_ITEMS = [
   { href: '/',            label: 'Dashboard',    icon: LayoutDashboard },
+  { href: '/analytics',   label: 'Analytics',    icon: BarChart2       },
   { href: '/chat',        label: 'Bot Chat Hub', icon: MessageSquare   },
   { href: '/alerts',      label: 'Alerts Center', icon: Bell           },
   { href: '/scripts',     label: 'Script Library', icon: BookOpen      },

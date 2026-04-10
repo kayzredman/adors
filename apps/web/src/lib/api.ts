@@ -88,4 +88,10 @@ export const api = {
         body: JSON.stringify({ script_id: scriptId, connection_id: connectionId }),
       }),
   },
+  analytics: {
+    fleet: (days = 7) =>
+      apiFetch<{ data: any }>(`/api/analytics/fleet?days=${days}`),
+    connection: (id: string, days = 30) =>
+      apiFetch<{ data: any }>(`/api/analytics/${id}?days=${days}`),
+  },
 }

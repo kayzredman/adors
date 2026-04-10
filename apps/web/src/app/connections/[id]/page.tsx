@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, RefreshCw, Cpu, Database } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Cpu, Database, BarChart2 } from 'lucide-react'
 import { HealthGauge } from '@/components/ui/HealthGauge'
 import { OracleDetailPanel }  from '@/components/dashboard/OracleDetailPanel'
 import { MssqlDetailPanel }   from '@/components/dashboard/MssqlDetailPanel'
@@ -104,6 +104,13 @@ export default function ConnectionDetailPage() {
                 : 'never'}</p>
             </div>
           </div>
+          <button
+            onClick={() => router.push(`/connections/${id}/analytics`)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border hover:bg-card text-muted-foreground hover:text-foreground text-sm font-medium transition-colors"
+          >
+            <BarChart2 className="w-4 h-4" />
+            Analytics
+          </button>
           <button
             onClick={triggerScan}
             disabled={scanning}
