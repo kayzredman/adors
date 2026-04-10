@@ -7,12 +7,17 @@
 ## Project
 
 - **Repo**: `E:/Dev/adors`
-- **Branch**: `feature/phase2-missing-ui-live-adapters`
-- **Stack**: pnpm monorepo — Next.js (`apps/web`), Hono API (`apps/api`), Supabase (auth + Postgres), Redis (job queue), Docker Compose (`infra/compose/`)
+- **Active branch**: `feature/phase3-analytics` (merged to `dev` after each push)
+- **Stack**: pnpm monorepo — Next.js (`apps/web`), Express API (`apps/api`), Supabase (auth + Postgres), Redis (job queue), Docker Compose (`infra/compose/`)
 - **Start stack**: `docker compose -f infra/compose/docker-compose.dev.yml up -d`
 - **Run migrations**: `pnpm db:migrate && pnpm db:seed`
-- **Dev API**: `pnpm --filter api dev` → `http://localhost:4000`
+- **Dev API**: `pnpm --filter api dev` → `http://localhost:4000`  ⚠️ MUST use pnpm dev (loads --env-file)
 - **Dev Web**: `pnpm --filter web dev` → `http://localhost:3002`
+
+### ⚠️ API Startup — Critical
+Always start the API with `pnpm --filter api dev` or `cd apps/api && pnpm dev`.
+**Never** run `tsx watch src/index.ts` directly — that skips `.env` loading, making Supabase fall back
+to `http://localhost:54321` (non-existent), which causes 403 "User profile not found" on every request.
 
 ---
 
@@ -79,6 +84,8 @@ ALTER TABLE connections ADD COLUMN oracle_privilege TEXT CHECK (oracle_privilege
 | PROD_AML_EDQ_DB | Oracle | Production |
 | DB STAGING BOX | MSSQL | UAT |
 | REPORTSDB | Oracle 11g | `10.236.200.52:1521` — needs Oracle Instant Client for thick mode |
+| FINTRAK_STAGING | Oracle | `10.236.9.170:1521` |
+| UAT_MARIADB_DB_STAGING | MariaDB | `10.236.210.160:3306` |
 
 ---
 
@@ -110,20 +117,36 @@ e16265e  fix: VERSION not VERSION_FULL (ORA-00904, Oracle 11g)
 ff8b6ce  fix: MariaDB ESM interop + flat keys
 ```
 
+## Phase 3 Commits (feature/phase3-analytics)
+
+```
+2a3d280  feat: Option B theme — always-dark sidebar, blue-grey light content tokens
+0e1a384  fix: HealthGauge clipping — scale font, overflow:hidden, explicit container height
+9f3759d  feat: configurable auto-refresh on connection detail page (Off/30s/1m/5m)
+fdcbc38  feat: Oracle Data Guard / HA state (v$database, v$archive_dest, v$dataguard_*)
+c5ea50a  feat: MSSQL HA state — Always On AG / Log Shipping / Mirroring + HaStateCard UI
+d0f8202  feat: backup history + disk utilization panels for Oracle, MSSQL, MariaDB
+```
+
 ---
 
 ## Next Steps
 
-### Analytics pages (not yet started)
+### Remaining Build List (in priority order)
 
-1. **`/analytics`** — Fleet health dashboard
-   - Score trends over time
-   - Production vs UAT average comparison
-   - Worst performers leaderboard
-   - API endpoint: `GET /api/analytics/fleet?days=7`
+1. **`/alerts`** — Alert management page
+   - List all alerts with filter by severity (critical/warning/info) and status (active/acknowledged/resolved)
+   - Acknowledge and resolve actions (role-gated: dba+ can acknowledge, dba+ can resolve)
+   - API: `GET /api/alerts`, `PATCH /api/alerts/:id`
 
-2. **`/connections/:id/analytics`** — Per-connection deep dive
-   - 30-day sparklines for all metrics
-   - API endpoint: `GET /api/analytics/:id?days=30`
+2. **`/scripts`** — Remediation scripts runner
+   - List scripts filtered by db_type and risk_level
+   - Risk-gated execution: zero/low needs dba, medium+ needs super_admin confirmation
+   - API: `GET /api/scripts`, `POST /api/sandbox` (execute sandboxed)
 
-3. Detail pages (`/connections/:id`) stay exactly as-is.
+3. **`/chat`** — AI agent interface
+   - Uses `packages/agents` (GitHub Models / OpenAI)
+   - Per-connection context injection
+   - API: streaming endpoint for agent responses
+
+4. **User management** — invite users, assign roles, profile settings
