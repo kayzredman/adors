@@ -18,15 +18,25 @@ export function HealthGauge({ score, size = 80, className }: HealthGaugeProps) {
     score >= 60 ? '#F59E0B' :
     '#EF4444'
 
-  const trackColor = 'rgba(255,255,255,0.08)'
+  const trackColor = 'rgba(128,128,128,0.15)'
+
+  // Scale font size with gauge size — text stays inside the container
+  const fontSize  = Math.max(10, Math.round(size * 0.28))
+  // Total height = arc height + room for score text below
+  const arcHeight = size / 2 + 6
+  const textH     = fontSize + 4
+  const totalH    = arcHeight + textH
 
   return (
-    <div className={cn('relative flex flex-col items-center', className)}>
+    <div
+      className={cn('relative flex flex-col items-center', className)}
+      style={{ width: size, height: totalH }}
+    >
       <svg
         width={size}
-        height={size / 2 + 6}
-        viewBox={`0 0 ${size} ${size / 2 + 6}`}
-        style={{ overflow: 'visible' }}
+        height={arcHeight}
+        viewBox={`0 0 ${size} ${arcHeight}`}
+        style={{ overflow: 'hidden', display: 'block' }}
       >
         {/* Track */}
         <path
@@ -46,15 +56,15 @@ export function HealthGauge({ score, size = 80, className }: HealthGaugeProps) {
           strokeDasharray={circumference}
           strokeDashoffset={offset}
           className="gauge-ring"
-          style={{ filter: `drop-shadow(0 0 6px ${color}88)` }}
+          style={{ filter: `drop-shadow(0 0 4px ${color}88)` }}
         />
       </svg>
-      {/* Score text */}
-      <div
-        className="absolute bottom-0 text-center"
-        style={{ bottom: -4 }}
-      >
-        <span className="text-2xl font-bold tabular-nums" style={{ color }}>
+      {/* Score text — sits directly below the arc, contained within totalH */}
+      <div className="flex items-center justify-center" style={{ height: textH }}>
+        <span
+          className="font-bold tabular-nums leading-none"
+          style={{ color, fontSize }}
+        >
           {score}
         </span>
       </div>
