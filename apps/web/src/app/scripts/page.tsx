@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { BookOpen, Shield, ShieldAlert, ShieldCheck, ShieldX, FlaskConical, X, Loader2, Play, CheckCircle2, XCircle, Clock, Rocket } from 'lucide-react'
+import { BookOpen, Shield, ShieldAlert, ShieldCheck, ShieldX, FlaskConical, X, Loader2, Play, CheckCircle2, XCircle, Clock, Rocket, Plus, Pencil, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useAuth } from '@/components/providers/AuthProvider'
@@ -41,11 +41,30 @@ const DB_COLORS = {
 
 export default function ScriptsPage() {
   const { role } = useAuth()
-  const canRun   = role === 'dba' || role === 'super_admin'
-  const [scripts, setScripts] = useState<Script[]>([])
-  const [loading, setLoading] = useState(true)
+  const canRun  = role === 'dba' || role === 'super_admin'
+  const canEdit = role === 'dba' || role === 'super_admin'
+  const [scripts,       setScripts]       = useState<Script[]>([])
+  const [loading,       setLoading]       = useState(true)
   const [testScript,    setTestScript]    = useState<Script | null>(null)
   const [promoteScript, setPromoteScript] = useState<Script | null>(null)
+  const [createMode,    setCreateMode]    = useState(false)
+  const [editScript,    setEditScript]    = useState<Script | null>(null)
+  const [deleteScript,  setDeleteScript]  = useState<Script | null>(null)
+
+  function handleSaved(saved: Script) {
+    if (editScript) {
+      setScripts(prev => prev.map(s => s.id === saved.id ? saved : s))
+    } else {
+      setScripts(prev => [...prev, saved])
+    }
+    setCreateMode(false)
+    setEditScript(null)
+  }
+
+  function handleDeleted(id: string) {
+    setScripts(prev => prev.filter(s => s.id !== id))
+    setDeleteScript(null)
+  }
 
   useEffect(() => {
     api.scripts.list()
@@ -72,7 +91,16 @@ export default function ScriptsPage() {
             Remediation scripts — UAT-verified before production execution
           </p>
         </div>
-        <div className="flex gap-3 text-sm text-muted-foreground">
+        <div className="flex items-center gap-3">
+          {canEdit && (
+            <button
+              onClick={() => setCreateMode(true)}
+              className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg bg-brand-500 text-white hover:bg-brand-400 transition-colors"
+            >
+              <Plus className="w-4 h-4" /> New Script
+            </button>
+          )}
+          <div className="flex gap-3 text-sm text-muted-foreground">
           {loading ? (
             <span className="text-muted-foreground text-xs animate-pulse">Loading…</span>
           ) : (
@@ -81,6 +109,7 @@ export default function ScriptsPage() {
               <span><strong className="text-success">{scripts.filter(s => s.verified_at).length}</strong> verified</span>
             </>
           )}
+          </div>
         </div>
       </div>
 
@@ -106,8 +135,11 @@ export default function ScriptsPage() {
                   key={script.id}
                   script={script}
                   canRun={canRun}
+                  canEdit={canEdit}
                   onTestInUat={canRun ? () => setTestScript(script) : undefined}
                   onPromoteToProd={canRun && script.verified_at ? () => setPromoteScript(script) : undefined}
+                  onEdit={canEdit ? () => setEditScript(script) : undefined}
+                  onDelete={canEdit ? () => setDeleteScript(script) : undefined}
                 />
               ))}
             </div>
@@ -130,11 +162,29 @@ export default function ScriptsPage() {
           onClose={() => setPromoteScript(null)}
         />
       )}
+
+      {/* Create / Edit modal */}
+      {(createMode || editScript) && (
+        <ScriptFormModal
+          script={editScript}
+          onClose={() => { setCreateMode(false); setEditScript(null) }}
+          onSaved={handleSaved}
+        />
+      )}
+
+      {/* Delete confirmation */}
+      {deleteScript && (
+        <DeleteModal
+          script={deleteScript}
+          onClose={() => setDeleteScript(null)}
+          onDeleted={() => handleDeleted(deleteScript.id)}
+        />
+      )}
     </div>
   )
 }
 
-function ScriptCard({ script, canRun, onTestInUat, onPromoteToProd }: { script: Script; canRun: boolean; onTestInUat?: () => void; onPromoteToProd?: () => void }) {
+function ScriptCard({ script, canRun, canEdit, onTestInUat, onPromoteToProd, onEdit, onDelete }: { script: Script; canRun: boolean; canEdit: boolean; onTestInUat?: () => void; onPromoteToProd?: () => void; onEdit?: () => void; onDelete?: () => void }) {
   const risk = RISK_CONFIG[script.risk_level]
   const RiskIcon = risk.icon
 
@@ -142,9 +192,21 @@ function ScriptCard({ script, canRun, onTestInUat, onPromoteToProd }: { script: 
     <div className="rounded-xl border border-border bg-card p-4 space-y-3 hover:border-border/60 transition-colors">
       <div className="flex items-start justify-between gap-2">
         <p className="font-semibold text-foreground text-sm leading-snug">{script.name}</p>
-        <span className={cn('shrink-0 inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide', risk.cls)}>
-          <RiskIcon className="w-3 h-3" />{risk.label}
-        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className={cn('inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 rounded border uppercase tracking-wide', risk.cls)}>
+            <RiskIcon className="w-3 h-3" />{risk.label}
+          </span>
+          {canEdit && (
+            <>
+              <button onClick={onEdit} title="Edit script" className="text-muted-foreground hover:text-foreground transition-colors p-0.5">
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={onDelete} title="Delete script" className="text-muted-foreground hover:text-critical transition-colors p-0.5">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       <p className="text-xs text-muted-foreground leading-relaxed">{script.description}</p>
@@ -514,6 +576,178 @@ function PromoteToProdModal({ script, onClose }: { script: Script; onClose: () =
               </div>
             </>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Create / Edit modal ─────────────────────────────────────────────────────
+function ScriptFormModal({
+  script,
+  onClose,
+  onSaved,
+}: {
+  script: Script | null
+  onClose: () => void
+  onSaved: (s: Script) => void
+}) {
+  const isEdit = !!script
+  const [name,        setName]        = useState(script?.name ?? '')
+  const [description, setDescription] = useState(script?.description ?? '')
+  const [dbType,      setDbType]      = useState<Script['db_type']>(script?.db_type ?? 'oracle')
+  const [riskLevel,   setRiskLevel]   = useState<Script['risk_level']>(script?.risk_level ?? 'zero')
+  const [source,      setSource]      = useState<Script['source']>(script?.source ?? 'internal')
+  const [sqlContent,  setSqlContent]  = useState(script?.sql_content ?? '')
+  const [saving,      setSaving]      = useState(false)
+  const [err,         setErr]         = useState<string | null>(null)
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    setSaving(true)
+    setErr(null)
+    const body = { name, description, db_type: dbType, risk_level: riskLevel, source, sql_content: sqlContent }
+    try {
+      const res = isEdit
+        ? await api.scripts.update(script!.id, body)
+        : await api.scripts.create(body)
+      onSaved(res.data as Script)
+    } catch (ex: any) {
+      setErr(ex.message ?? 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const inputCls = 'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-500/40'
+  const selectCls = inputCls
+
+  return (
+    <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+      <form onSubmit={submit} className="w-full max-w-lg rounded-2xl border border-border bg-card shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <p className="font-semibold text-foreground text-sm">{isEdit ? 'Edit Script' : 'New Script'}</p>
+          <button type="button" onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Name</label>
+            <input className={inputCls} value={name} onChange={e => setName(e.target.value)} required maxLength={120} placeholder="e.g. Clear temp tables" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Description</label>
+            <input className={inputCls} value={description} onChange={e => setDescription(e.target.value)} maxLength={500} placeholder="What this script does…" />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">DB Type</label>
+              <select className={selectCls} value={dbType} onChange={e => setDbType(e.target.value as Script['db_type'])}>
+                <option value="oracle">Oracle</option>
+                <option value="mssql">MSSQL</option>
+                <option value="mariadb">MariaDB</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Risk</label>
+              <select className={selectCls} value={riskLevel} onChange={e => setRiskLevel(e.target.value as Script['risk_level'])}>
+                <option value="zero">Zero</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Source</label>
+              <select className={selectCls} value={source} onChange={e => setSource(e.target.value as Script['source'])}>
+                <option value="internal">Internal</option>
+                <option value="oem">OEM</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">SQL Content</label>
+            <textarea
+              className={cn(inputCls, 'font-mono text-xs h-40 resize-none')}
+              value={sqlContent}
+              onChange={e => setSqlContent(e.target.value)}
+              required
+              placeholder="SELECT …"
+            />
+            {isEdit && sqlContent !== script?.sql_content && (
+              <p className="text-[10px] text-warning mt-1">Changing SQL resets sandbox verification — re-test before promoting to production.</p>
+            )}
+          </div>
+          {err && <p className="text-xs text-critical">{err}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="text-sm px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">Cancel</button>
+            <button
+              type="submit"
+              disabled={saving || !name.trim() || !sqlContent.trim()}
+              className="flex items-center gap-2 text-sm px-4 py-1.5 rounded-lg bg-brand-500 text-white hover:bg-brand-400 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {saving && <Loader2 className="w-3 h-3 animate-spin" />}
+              {isEdit ? 'Save Changes' : 'Create Script'}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ─── Delete confirmation ─────────────────────────────────────────────────────
+function DeleteModal({
+  script,
+  onClose,
+  onDeleted,
+}: {
+  script: Script
+  onClose: () => void
+  onDeleted: () => void
+}) {
+  const [deleting, setDeleting] = useState(false)
+  const [err,      setErr]      = useState<string | null>(null)
+
+  async function confirm() {
+    setDeleting(true)
+    setErr(null)
+    try {
+      await api.scripts.delete(script.id)
+      onDeleted()
+    } catch (ex: any) {
+      setErr(ex.message ?? 'Delete failed')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
+      <div className="w-full max-w-sm rounded-2xl border border-critical/40 bg-card shadow-xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-critical/20 bg-critical/5">
+          <div className="flex items-center gap-2">
+            <Trash2 className="w-4 h-4 text-critical" />
+            <p className="font-semibold text-foreground text-sm">Delete Script</p>
+          </div>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-foreground">
+            Are you sure you want to delete <strong>{script.name}</strong>? This cannot be undone.
+          </p>
+          {err && <p className="text-xs text-critical">{err}</p>}
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} className="text-sm px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors">Cancel</button>
+            <button
+              onClick={confirm}
+              disabled={deleting}
+              className="flex items-center gap-2 text-sm px-4 py-1.5 rounded-lg bg-critical text-white hover:bg-critical/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {deleting && <Loader2 className="w-3 h-3 animate-spin" />}
+              Delete
+            </button>
+          </div>
         </div>
       </div>
     </div>

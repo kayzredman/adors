@@ -78,6 +78,18 @@ export const api = {
       return apiFetch<{ data: unknown[] }>(`/api/scripts${qs}`)
     },
     get:         (id: string) => apiFetch<{ data: unknown }>(`/api/scripts/${id}`),
+    create: (body: Record<string, unknown>) =>
+      apiFetch<{ data: unknown }>('/api/scripts', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ data: unknown }>(`/api/scripts/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    delete: (id: string) =>
+      apiFetch<{ message: string }>(`/api/scripts/${id}`, { method: 'DELETE' }),
     executeProd: (id: string, connectionId: string) =>
       apiFetch<{ data: { exec_ms: number; row_count: number; columns: string[]; rows: Record<string, unknown>[]; script_name: string; connection_name: string } }>(
         `/api/scripts/${id}/execute-prod`,

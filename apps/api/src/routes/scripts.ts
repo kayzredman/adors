@@ -193,4 +193,56 @@ router.post('/:id/execute-prod', requireAuth, requireDBA, async (req, res) => {
   }
 })
 
+// PATCH /api/scripts/:id — update script metadata (DBA+)
+// Editing sql_content resets sandbox verification to require re-testing before prod use.
+const updateSchema = z.object({
+  name:        z.string().min(1).max(120).optional(),
+  description: z.string().max(500).optional(),
+  db_type:     z.enum(['oracle', 'mssql', 'mariadb']).optional(),
+  risk_level:  z.enum(['zero', 'low', 'medium', 'high']).optional(),
+  sql_content: z.string().min(1).optional(),
+  source:      z.enum(['internal', 'oem']).optional(),
+})
+
+router.patch('/:id', requireAuth, requireDBA, async (req, res) => {
+  const parsed = updateSchema.safeParse(req.body)
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
+
+  try {
+    const updates: Record<string, unknown> = { ...parsed.data }
+    // Reset sandbox verification whenever SQL is changed
+    if (parsed.data.sql_content !== undefined) {
+      updates.verified_at = null
+      updates.verified_by = null
+    }
+
+    const { data, error } = await supabase
+      .from('scripts')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single()
+
+    if (error || !data) return res.status(404).json({ error: 'Script not found' })
+    res.json({ data })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// DELETE /api/scripts/:id — remove script (DBA+)
+router.delete('/:id', requireAuth, requireDBA, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('scripts')
+      .delete()
+      .eq('id', req.params.id)
+
+    if (error) throw error
+    res.json({ message: 'Script deleted' })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 export default router

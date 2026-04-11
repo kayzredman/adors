@@ -75,6 +75,20 @@ router.get('/fleet', requireAuth, async (req, res) => {
       .sort((a, b) => a.score! - b.score!)
       .slice(0, 5)
 
+    // Per-DB-type breakdown
+    const allDbTypes = ['oracle', 'mssql', 'mariadb'] as const
+    const by_db_type = Object.fromEntries(
+      allDbTypes.map(dbType => {
+        const all    = (conns ?? []).filter(c => c.db_type === dbType)
+        const scored = withScores.filter(c => c.db_type === dbType)
+        return [dbType, {
+          count:      all.length,
+          avg:        scored.length ? Math.round(scored.reduce((s, c) => s + c.score!, 0) / scored.length) : null,
+          worst:      [...scored].sort((a, b) => a.score! - b.score!).slice(0, 3),
+        }]
+      })
+    )
+
     // Fleet-wide score trend over the window (average score per day)
     const dayBuckets: Record<string, number[]> = {}
     for (const s of (snaps ?? [])) {
@@ -99,6 +113,7 @@ router.get('/fleet', requireAuth, async (req, res) => {
         },
         worst_performers: worstPerformers,
         fleet_trend:      fleetTrend,
+        by_db_type,
         days,
       },
     })
@@ -144,10 +159,17 @@ router.get('/:id', requireAuth, async (req, res) => {
     const metricKeys = [
       // Oracle
       'sessions_active', 'sessions_blocked', 'storage_data_pct', 'sga_currently_used_gb',
+      'storage_temp_pct', 'storage_undo_pct', 'redo_log_used_pct', 'tablespace_usage_pct',
+      'db_cpu_ratio_pct',
       // MSSQL
       'active_connections', 'buffer_pool_memory_pct', 'cpu_usage_pct', 'blocking_spids',
+      'page_life_expectancy_sec', 'batch_requests_sec', 'deadlocks_per_min',
+      'disk_reads_per_sec', 'disk_writes_per_sec', 'total_server_memory_gb',
       // MariaDB / shared
       'innodb_buffer_hit_ratio_pct', 'queries_per_sec', 'replication_lag_sec',
+      'slow_queries_per_min', 'table_lock_waited', 'disk_usage_pct', 'disk_used_gb',
+      // All adapters
+      'uptime_days',
     ]
 
     const metric_trends: Record<string, { t: string; v: number }[]> = {}
@@ -168,14 +190,19 @@ router.get('/:id', requireAuth, async (req, res) => {
         }
       : null
 
+    // Latest snapshot metrics (non-trending fields: backup_history, disk_mounts, ha_state)
+    const latestSnap = rows[rows.length - 1]
+    const latest_metrics: Record<string, unknown> = latestSnap?.metrics ?? {}
+
     res.json({
       data: {
-        connection:    conn,
+        connection:     conn,
         days,
         score_history,
-        score_stats:   scoreStats,
+        score_stats:    scoreStats,
         status_counts,
         metric_trends,
+        latest_metrics,
         snapshot_count: rows.length,
       },
     })
