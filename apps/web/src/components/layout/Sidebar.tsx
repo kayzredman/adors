@@ -18,6 +18,7 @@ import {
   X,
   Users,
   UserCircle2,
+  Settings,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -147,6 +148,18 @@ export function Sidebar() {
           <span className="w-2 h-2 rounded-full bg-success animate-pulse-slow" />
           SYSTEM SCANNING
         </div>
+        <Link
+          href="/settings"
+          className={cn(
+            'flex items-center gap-2 text-xs transition-colors',
+            pathname === '/settings'
+              ? 'text-brand-400'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          <Settings className="w-3.5 h-3.5" />
+          Settings
+        </Link>
         <button
           onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"

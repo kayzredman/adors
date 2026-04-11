@@ -148,4 +148,23 @@ export const api = {
         body: JSON.stringify({ full_name }),
       }),
   },
+  settings: {
+    updateProfile: (full_name: string, userId?: string) =>
+      apiFetch<{ data: unknown; message: string }>(`/api/settings/profile${userId ? `?user_id=${userId}` : ''}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ full_name }),
+      }),
+    changePassword: (password: string, userId?: string) =>
+      apiFetch<{ message: string }>(`/api/settings/password${userId ? `?user_id=${userId}` : ''}`, {
+        method: 'POST',
+        body: JSON.stringify({ password }),
+      }),
+    getMfa: (userId?: string) =>
+      apiFetch<{ data: { enrolled: boolean; factor_id: string | null; created_at: string | null } }>(`/api/settings/mfa${userId ? `?user_id=${userId}` : ''}`),
+    removeMfa: (factor_id: string, userId?: string) =>
+      apiFetch<{ message: string }>(`/api/settings/mfa${userId ? `?user_id=${userId}` : ''}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ factor_id }),
+      }),
+  },
 }

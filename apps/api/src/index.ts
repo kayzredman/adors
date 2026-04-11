@@ -19,6 +19,7 @@ import meRouter from './routes/me.js'
 import analyticsRouter from './routes/analytics.js'
 import agentsRouter from './routes/agents.js'
 import adminRouter, { profileRouter } from './routes/admin.js'
+import settingsRouter from './routes/settings.js'
 import { startHealthScanScheduler, createHealthScanWorker, closeWorker, releaseSchedulerLock } from './workers/healthScanWorker.js'
 
 const app = express()
@@ -63,6 +64,7 @@ app.use('/api/analytics',   analyticsRouter)
 app.use('/api/agents',      agentLimiter, agentsRouter)
 app.use('/api/admin',       adminRouter)
 app.use('/api/admin',       profileRouter)
+app.use('/api/settings',    settingsRouter)
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {
