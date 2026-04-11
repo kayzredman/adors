@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { BookOpen, Shield, ShieldAlert, ShieldCheck, ShieldX, FlaskConical, X, Loader2 } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { BookOpen, Shield, ShieldAlert, ShieldCheck, ShieldX, FlaskConical, X, Loader2, Play, CheckCircle2, XCircle, Clock } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useAuth } from '@/components/providers/AuthProvider'
@@ -171,12 +171,20 @@ function ScriptCard({ script, canRun, onTestInUat }: { script: Script; canRun: b
 }
 
 // ─── UAT env picker modal ────────────────────────────────────────────────────
+type RunStatus = 'pending' | 'running' | 'success' | 'failure' | 'error'
+
 function TestInUatModal({ script, onClose }: { script: Script; onClose: () => void }) {
   const [envs, setEnvs]         = useState<UatEnv[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [done, setDone]         = useState<string | null>(null)
   const [err, setErr]           = useState<string | null>(null)
+
+  // Polling state
+  const [runId, setRunId]         = useState<string | null>(null)
+  const [runStatus, setRunStatus] = useState<RunStatus | null>(null)
+  const [runOutput, setRunOutput] = useState<string | null>(null)
+  const [runMs, setRunMs]         = useState<number | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     api.sandbox.envs()
@@ -189,19 +197,50 @@ function TestInUatModal({ script, onClose }: { script: Script; onClose: () => vo
       .catch(() => setErr('Failed to load UAT environments'))
   }, [script.db_type])
 
+  // Start polling when runId is set
+  useEffect(() => {
+    if (!runId) return
+
+    const poll = async () => {
+      try {
+        const res = await api.sandbox.getRun(runId)
+        const run = res.data as any
+        setRunStatus(run.status as RunStatus)
+        setRunOutput(run.output_log ?? null)
+        setRunMs(run.exec_duration_ms ?? null)
+        if (run.status === 'success' || run.status === 'failure' || run.status === 'error') {
+          clearInterval(pollRef.current!)
+          pollRef.current = null
+        }
+      } catch {
+        // transient — keep polling
+      }
+    }
+
+    poll() // immediate first check
+    pollRef.current = setInterval(poll, 2000)
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [runId])
+
   async function submit() {
     if (!selected) return
     setSubmitting(true)
     setErr(null)
     try {
       const res = await api.sandbox.run(script.id, selected)
-      setDone((res as any).message ?? 'Run queued')
+      setRunId(res.data.id)
+      setRunStatus('pending')
     } catch (e: any) {
       setErr(e.message ?? 'Failed to queue run')
     } finally {
       setSubmitting(false)
     }
   }
+
+  const isTerminal = runStatus === 'success' || runStatus === 'failure' || runStatus === 'error'
 
   return (
     <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-6">
@@ -222,12 +261,55 @@ function TestInUatModal({ script, onClose }: { script: Script; onClose: () => vo
             <p className="font-semibold text-foreground">{script.name}</p>
           </div>
 
-          {done ? (
-            <div className="rounded-lg bg-success/10 border border-success/30 px-4 py-3 text-sm text-success">
-              ✓ {done}
-              <p className="text-xs mt-1 text-muted-foreground">Check the Sandbox page for run status.</p>
+          {/* ── Polling / status view ── */}
+          {runStatus ? (
+            <div className="space-y-3">
+              {/* Status badge */}
+              <div className={cn(
+                'flex items-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium',
+                runStatus === 'success'  ? 'text-success border-success/30 bg-success/10' :
+                runStatus === 'failure' || runStatus === 'error'
+                                         ? 'text-critical border-critical/30 bg-critical/10' :
+                                           'text-muted-foreground border-border bg-muted/30'
+              )}>
+                {runStatus === 'success'  ? <CheckCircle2 className="w-4 h-4 shrink-0" /> :
+                 runStatus === 'failure' || runStatus === 'error'
+                                          ? <XCircle className="w-4 h-4 shrink-0" /> :
+                 runStatus === 'running'  ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> :
+                                           <Clock className="w-4 h-4 shrink-0" />}
+                <span className="capitalize">{runStatus}</span>
+                {runMs != null && isTerminal && (
+                  <span className="ml-auto text-xs font-normal text-muted-foreground">{runMs}ms</span>
+                )}
+              </div>
+
+              {/* Output log (terminal states) */}
+              {runOutput && isTerminal && (
+                <pre className="rounded-md bg-muted/50 border border-border/50 px-3 py-2 text-[11px] font-mono text-muted-foreground overflow-x-auto whitespace-pre-wrap max-h-40 overflow-y-auto">
+                  {runOutput}
+                </pre>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2 pt-1">
+                {isTerminal && (
+                  <button
+                    onClick={() => { setRunId(null); setRunStatus(null); setRunOutput(null); setRunMs(null) }}
+                    className="text-sm px-3 py-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Run Again
+                  </button>
+                )}
+                <button
+                  onClick={onClose}
+                  className="text-sm px-4 py-1.5 rounded-lg bg-brand-500 text-white hover:bg-brand-400 transition-colors"
+                >
+                  {isTerminal ? 'Done' : 'Close'}
+                </button>
+              </div>
             </div>
           ) : (
+            /* ── Env picker ── */
             <>
               <div>
                 <p className="text-xs text-muted-foreground mb-2">Select UAT environment ({script.db_type.toUpperCase()})</p>

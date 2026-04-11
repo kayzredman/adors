@@ -80,10 +80,11 @@ export const api = {
     get: (id: string) => apiFetch<{ data: unknown }>(`/api/scripts/${id}`),
   },
   sandbox: {
-    envs: () => apiFetch<{ data: unknown[] }>('/api/sandbox/envs'),
-    runs: () => apiFetch<{ data: unknown[] }>('/api/sandbox/runs'),
-    run:  (scriptId: string, connectionId: string) =>
-      apiFetch<{ data: unknown; message: string }>('/api/sandbox/run', {
+    envs:   () => apiFetch<{ data: unknown[] }>('/api/sandbox/envs'),
+    runs:   () => apiFetch<{ data: unknown[] }>('/api/sandbox/runs'),
+    getRun: (id: string) => apiFetch<{ data: unknown }>(`/api/sandbox/runs/${id}`),
+    run:    (scriptId: string, connectionId: string) =>
+      apiFetch<{ data: { id: string }; message: string }>('/api/sandbox/run', {
         method: 'POST',
         body: JSON.stringify({ script_id: scriptId, connection_id: connectionId }),
       }),
