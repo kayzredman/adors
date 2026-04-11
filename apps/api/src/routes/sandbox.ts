@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase } from '../config/supabase.js'
-import { requireAuth, requireDBA } from '../middleware/auth.js'
+import { requireAuth, requireDBA, requireAAL2 } from '../middleware/auth.js'
 import { logActivity } from '../services/activityService.js'
 import { getAdapter } from '../adapters/index.js'
 import { getConnectionCredentials } from '../services/connectionService.js'
@@ -83,7 +83,7 @@ const runSchema = z.object({
   connection_id: z.string().uuid(),
 })
 
-router.post('/run', requireAuth, requireDBA, async (req, res) => {
+router.post('/run', requireAuth, requireDBA, requireAAL2, async (req, res) => {
   const parsed = runSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
 

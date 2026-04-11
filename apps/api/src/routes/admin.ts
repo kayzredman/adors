@@ -1,11 +1,11 @@
 import { Router } from 'express'
-import { requireAuth, requireRole, invalidateRoleCache } from '../middleware/auth.js'
+import { requireAuth, requireRole, invalidateRoleCache, requireAAL2 } from '../middleware/auth.js'
 import https from 'https'
 
 const router = Router()
 
-// All admin routes require super_admin
-router.use(requireAuth, requireRole('super_admin'))
+// All admin routes require super_admin + aal2
+router.use(requireAuth, requireRole('super_admin'), requireAAL2)
 
 // ─── GET /api/admin/users ─────────────────────────────────────────────────────
 router.get('/users', async (req, res) => {

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { requireAuth } from '../middleware/auth.js'
+import { requireAuth, requireAAL2 } from '../middleware/auth.js'
 import { z } from 'zod'
 
 const router = Router()
@@ -60,7 +60,7 @@ const passwordSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters').max(128),
 })
 
-router.post('/password', requireAuth, async (req, res) => {
+router.post('/password', requireAuth, requireAAL2, async (req, res) => {
   const targetId = resolveTarget(req, res)
   if (!targetId) return
 
@@ -109,7 +109,7 @@ router.get('/mfa', requireAuth, async (req, res) => {
 })
 
 // ─── DELETE /api/settings/mfa ────────────────────────────────────────────────
-router.delete('/mfa', requireAuth, async (req, res) => {
+router.delete('/mfa', requireAuth, requireAAL2, async (req, res) => {
   const targetId = resolveTarget(req, res)
   if (!targetId) return
 

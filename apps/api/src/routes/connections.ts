@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { z } from 'zod'
-import { requireAuth, requireDBA, requireSuperAdmin } from '../middleware/auth.js'
+import { requireAuth, requireDBA, requireSuperAdmin, requireAAL2 } from '../middleware/auth.js'
 import {
   getAllConnections,
   getConnectionById,
@@ -98,7 +98,7 @@ const createSchema = z.object({
   oracle_privilege: z.enum(['SYSDBA', 'SYSOPER']).optional(),
 })
 
-router.post('/', requireAuth, requireDBA, async (req, res) => {
+router.post('/', requireAuth, requireDBA, requireAAL2, async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() })
@@ -174,7 +174,7 @@ const updateSchema = z.object({
   oracle_privilege: z.enum(['SYSDBA', 'SYSOPER']).nullable().optional(),
 })
 
-router.patch('/:id', requireAuth, requireDBA, async (req, res) => {
+router.patch('/:id', requireAuth, requireDBA, requireAAL2, async (req, res) => {
   const parsed = updateSchema.safeParse(req.body)
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() })
@@ -202,7 +202,7 @@ router.patch('/:id', requireAuth, requireDBA, async (req, res) => {
 })
 
 // ─── DELETE /api/connections/:id ─────────────────────────────────────────────
-router.delete('/:id', requireAuth, requireSuperAdmin, async (req, res) => {
+router.delete('/:id', requireAuth, requireSuperAdmin, requireAAL2, async (req, res) => {
   try {
     const conn = await getConnectionById(req.params.id)
     if (!conn) {

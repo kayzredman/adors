@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { supabase } from '../config/supabase.js'
-import { requireAuth, requireDBA } from '../middleware/auth.js'
+import { requireAuth, requireDBA, requireAAL2 } from '../middleware/auth.js'
 import { logActivity } from '../services/activityService.js'
 import { getAdapter } from '../adapters/index.js'
 import { getConnectionById, getConnectionCredentials } from '../services/connectionService.js'
@@ -59,7 +59,7 @@ const createSchema = z.object({
   source:      z.enum(['internal', 'oem']).default('internal'),
 })
 
-router.post('/', requireAuth, requireDBA, async (req, res) => {
+router.post('/', requireAuth, requireDBA, requireAAL2, async (req, res) => {
   const parsed = createSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
 
@@ -99,7 +99,7 @@ const execProdSchema = z.object({
   connection_id: z.string().uuid(),
 })
 
-router.post('/:id/execute-prod', requireAuth, requireDBA, async (req, res) => {
+router.post('/:id/execute-prod', requireAuth, requireDBA, requireAAL2, async (req, res) => {
   const parsed = execProdSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
 

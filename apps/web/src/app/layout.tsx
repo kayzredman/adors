@@ -3,6 +3,7 @@ import { Inter } from 'next/font/google'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
 import { AuthProvider } from '@/components/providers/AuthProvider'
 import { Sidebar } from '@/components/layout/Sidebar'
+import { AALBanner } from '@/components/layout/AALBanner'
 import '../styles/globals.css'
 
 const inter = Inter({ subsets: ['latin'] })
@@ -29,6 +30,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex h-screen overflow-hidden bg-background">
               <Sidebar />
               <main className="flex-1 overflow-y-auto bg-background transition-colors duration-300 pt-[52px] lg:pt-0">
+                <AALBanner />
                 {children}
               </main>
             </div>

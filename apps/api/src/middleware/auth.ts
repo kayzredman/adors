@@ -10,6 +10,7 @@ declare global {
         id: string
         email: string
         role: UserRole
+        aal: 'aal1' | 'aal2'
       }
     }
   }
@@ -24,6 +25,7 @@ interface SupabaseJwtPayload {
   sub: string
   email?: string
   role?: string
+  aal?: string
   exp?: number
   iat?: number
 }
@@ -57,11 +59,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
   const userId = payload.sub
   const email  = payload.email ?? ''
+  const aal    = (payload.aal === 'aal2' ? 'aal2' : 'aal1') as 'aal1' | 'aal2'
 
   // Check role cache first
   const cached = roleCache.get(userId)
   if (cached && Date.now() < cached.expiresAt) {
-    req.user = { id: userId, email, role: cached.role }
+    req.user = { id: userId, email, role: cached.role, aal }
     return next()
   }
 
@@ -87,7 +90,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       }
       const role = newProfile.role as UserRole
       roleCache.set(userId, { role, expiresAt: Date.now() + CACHE_TTL_MS })
-      req.user = { id: userId, email, role }
+      req.user = { id: userId, email, role, aal }
       next()
       return
     }
@@ -101,11 +104,65 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const role = profile.role as UserRole
     roleCache.set(userId, { role, expiresAt: Date.now() + CACHE_TTL_MS })
 
-    req.user = { id: userId, email, role }
+    req.user = { id: userId, email, role, aal }
     next()
   } catch {
     res.status(500).json({ error: 'Authentication service error' })
   }
+}
+
+// ─── AAL2 Enforcement ────────────────────────────────────────────────────────
+// Users who have enrolled TOTP must present an aal2 session for sensitive ops.
+// Users without TOTP (aal1-only) pass through — AAL2 is only enforced when the
+// user *has* enrolled MFA but the current session hasn't been verified yet.
+
+export function requireAAL2(req: Request, res: Response, next: NextFunction) {
+  if (!req.user) {
+    res.status(401).json({ error: 'Not authenticated' })
+    return
+  }
+  // aal2 sessions always pass
+  if (req.user.aal === 'aal2') return next()
+
+  // For aal1 sessions, we need to check if the user has TOTP enrolled.
+  // If they do, they must step-up to aal2. If they don't, aal1 is fine.
+  checkUserHasTOTP(req.user.id)
+    .then((hasTOTP) => {
+      if (hasTOTP) {
+        res.status(403).json({
+          error: 'MFA verification required',
+          code: 'aal2_required',
+        })
+      } else {
+        next()
+      }
+    })
+    .catch(() => {
+      // On error, fail open — don't lock the user out due to a transient issue
+      next()
+    })
+}
+
+// Cache TOTP enrollment status per user (short TTL)
+const totpCache = new Map<string, { hasTOTP: boolean; expiresAt: number }>()
+const TOTP_CACHE_TTL_MS = 2 * 60 * 1000 // 2 minutes
+
+async function checkUserHasTOTP(userId: string): Promise<boolean> {
+  const cached = totpCache.get(userId)
+  if (cached && Date.now() < cached.expiresAt) return cached.hasTOTP
+
+  const { createClient } = await import('@supabase/supabase-js')
+  const adminClient = createClient(
+    process.env.SUPABASE_URL ?? 'http://localhost:8000',
+    process.env.SUPABASE_SERVICE_KEY ?? '',
+  )
+  const { data } = await adminClient.auth.admin.getUserById(userId)
+  const factors = (data?.user as any)?.factors ?? []
+  const hasTOTP = factors.some(
+    (f: any) => f.factor_type === 'totp' && f.status === 'verified',
+  )
+  totpCache.set(userId, { hasTOTP, expiresAt: Date.now() + TOTP_CACHE_TTL_MS })
+  return hasTOTP
 }
 
 // ─── RBAC Middleware Factory ─────────────────────────────────────────────────
