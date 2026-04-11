@@ -1,6 +1,6 @@
 # ADORS — Agentic Database Observability & Remediation System
 
-> Self-hosted AIOps platform for Oracle, MSSQL, and MariaDB fleets. Real-time health monitoring, agentic AI chat with live tool calling, UAT-first script execution, and full analytics history — all under one roof.
+> Self-hosted AIOps platform for Oracle, MSSQL, and MariaDB fleets. Real-time health monitoring, agentic AI chat with live tool calling, UAT-first script execution, full analytics history, and multi-user access control — all under one roof.
 
 ---
 
@@ -25,69 +25,127 @@ All health data collected every minute is permanently stored and queryable for t
 | **UAT Sandbox** | Safe execution environment — scripts always tested in UAT before touching production |
 | **Connections Manager** | Register and manage all DB connections, trigger manual health scans |
 | **Analytics** | Time-series health trends, tablespace growth projections, backup trends, anomaly scoring for every connection |
+| **User Management** | Invite-based onboarding, role assignment, account deactivation — `super_admin` only |
 
 ---
 
 ## Architecture
 
+### Top-Level Overview
+
 ```
-┌─────────────────── apps/web  (Next.js 15, :3002) ────────────────────┐
-│  App Router pages → /  /chat  /alerts  /scripts  /sandbox  /analytics │
-│  shadcn/ui + Tailwind + Recharts                                       │
-│  SSE streaming for agent chat (token-by-token)                         │
-└──────────────────────────┬────────────────────────────────────────────┘
+Browser (Next.js :3002)
+  │
+  ├─► REST/fetch ──────────────────────────────► Express API (:4000)
+  │     Bearer JWT (verified locally via JWT_SECRET)      │
+  │                                                        ├─► Supabase Postgres (user_profiles, connections,
+  │                                                        │   health_snapshots, alerts, scripts, activity_log,
+  │                                                        │   chat_sessions)
+  │                                                        ├─► Live DB fleet (Oracle / MSSQL / MariaDB adapters)
+  │                                                        ├─► Redis / BullMQ (health scan job queues)
+  │                                                        └─► GitHub Models API (GPT-4o-mini, SSE stream)
+  │
+  └─► Supabase Auth (:8000 via Kong)
+        signIn / signOut / invite / token refresh
+        GoTrue validates JWTs; Kong routes to GoTrue + PostgREST
+```
+
+### Detailed Service Architecture
+
+```
+┌─────────────────── apps/web  (Next.js 15, :3002) ───────────────────────┐
+│  App Router pages:                                                        │
+│    /                  Mission Control dashboard                           │
+│    /chat              Bot Chat Hub (SSE streaming)                        │
+│    /alerts            Alerts Center                                       │
+│    /scripts           Script Library                                      │
+│    /sandbox           UAT Sandbox + connection CRUD                       │
+│    /analytics         Fleet + per-connection time-series                  │
+│    /connections       Connection manager + detail panels                  │
+│    /admin/users       User management (super_admin only)                  │
+│    /login             Email/password + optional TOTP MFA challenge        │
+│    /onboarding/profile  Invite token → set password + display name       │
+│    /onboarding/mfa    Enrol TOTP (for roles with MFA required)            │
+│    /setup             First-run admin account creation                    │
+│                                                                           │
+│  Key client libraries:                                                    │
+│    @supabase/ssr (browser + server clients)                               │
+│    Recharts (time-series charts)                                          │
+│    shadcn/ui + Tailwind CSS                                               │
+│    Lucide icons                                                           │
+│                                                                           │
+│  middleware.ts — JWT refresh + route guard:                               │
+│    • Calls getUser() with try/catch — falls back to cookie session        │
+│      if Kong/GoTrue is temporarily unreachable                            │
+│    • Redirects unauthenticated → /login                                   │
+│    • Redirects authenticated + /login → /                                 │
+│    • /api/* and /onboarding/* routes are exempt                           │
+└──────────────────────────┬──────────────────────────────────────────────┘
                            │ REST + SSE  (Bearer JWT)
-┌──────────────────── apps/api  (Express, :4000) ───────────────────────┐
-│  Auth middleware  → local JWT verify (SUPABASE_JWT_SECRET)             │
-│  RBAC middleware  → role check from user_profiles table                │
-│  Rate limiter     → express-rate-limit per IP                          │
-│                                                                        │
-│  Routes:                                                               │
-│    GET  /api/connections           – fleet list + latest health        │
-│    GET  /api/connections/:id       – single connection detail          │
-│    GET  /api/alerts                – alert list with filters           │
-│    PATCH /api/alerts/:id           – acknowledge / resolve             │
-│    GET  /api/activity              – activity feed                     │
-│    GET  /api/analytics/fleet       – fleet health trends               │
-│    GET  /api/analytics/:id         – per-connection 30-day series      │
-│    POST /api/agents/chat           – SSE: agent chat with tool calling │
-│    POST /api/sandbox               – sandboxed script execution        │
-│    GET  /api/scripts               – remediation script catalog        │
-│    GET  /api/me                    – authenticated user profile        │
-│                                                                        │
-│  Workers (BullMQ):                                                     │
-│    priority-scan  (every 1 min)   – critical + warning connections     │
-│    routine-scan   (every 3 min)   – healthy connections                │
-│    → distributed lock via Redis SET NX (one leader across instances)  │
-│    → batched (3 concurrent) to protect PostgREST connection pool       │
-└──────────┬────────────────────────────────┬───────────────────────────┘
+┌──────────────────── apps/api  (Express 5, :4000) ───────────────────────┐
+│  Auth middleware   → local JWT verify (SUPABASE_JWT_SECRET — no network) │
+│  RBAC middleware   → role read from user_profiles cache (6-min TTL)      │
+│  Rate limiter      → express-rate-limit per IP                           │
+│                                                                           │
+│  Routes:                                                                  │
+│    GET    /api/me                    — own profile                        │
+│    PATCH  /api/me                    — set onboarded=true + full_name     │
+│    GET    /api/connections           — fleet list + latest health         │
+│    GET    /api/connections/:id       — single connection detail           │
+│    POST   /api/connections           — add connection                     │
+│    PATCH  /api/connections/:id       — update connection                  │
+│    DELETE /api/connections/:id       — remove connection                  │
+│    POST   /api/connections/:id/scan  — trigger manual health scan         │
+│    GET    /api/alerts                — alert list with filters            │
+│    PATCH  /api/alerts/:id            — acknowledge / resolve              │
+│    GET    /api/activity              — activity feed                      │
+│    GET    /api/analytics/fleet       — fleet health trends                │
+│    GET    /api/analytics/:id         — per-connection 30-day series       │
+│    POST   /api/agents/chat           — SSE: agent chat + tool calling     │
+│    POST   /api/sandbox               — sandboxed script execution         │
+│    GET    /api/scripts               — remediation script catalog         │
+│    GET    /api/admin/users           — list all users (super_admin)       │
+│    POST   /api/admin/users/invite    — invite user via GoTrue + Resend    │
+│    POST   /api/admin/users/reinvite/:id — resend invite link              │
+│    PATCH  /api/admin/users/:id/role  — change user role                   │
+│    PATCH  /api/admin/users/:id/name  — update display name               │
+│    POST   /api/admin/users/:id/deactivate   — soft-deactivate             │
+│    POST   /api/admin/users/:id/reactivate   — restore access             │
+│                                                                           │
+│  Workers (BullMQ):                                                        │
+│    priority-scan  (every 1 min)   — critical + warning connections        │
+│    routine-scan   (every 3 min)   — healthy connections                   │
+│    → distributed lock via Redis SET NX (one leader across instances)     │
+│    → batched (3 concurrent) to protect PostgREST connection pool         │
+└──────────┬────────────────────────────────┬─────────────────────────────┘
            │                                │
-┌──────────▼──────────┐      ┌──────────────▼──────────────────────────┐
-│  Supabase (:8000)   │      │  DB Fleet (live adapters)                │
-│  – Postgres 15      │      │  oracleAdapter  → Oracle 11g–23c         │
-│  – GoTrue auth      │      │    thin→thick auto-fallback (NJS-138)    │
-│  – PostgREST API    │      │    SYSDBA/SYSOPER privilege support      │
-│  – Kong gateway     │      │  mssqlAdapter   → SQL Server 2012–2022   │
-│                     │      │    DMV-backed metrics, wait stats        │
-│  tables:            │      │  mariadbAdapter → MariaDB 10.4+          │
-│  connections        │      │    InnoDB, replication, slow query       │
-│  health_snapshots   │      │                                          │
-│  alerts             │      │  executeQuery() on all three             │
-│  scripts            │      │  → read-only SELECT only                 │
-│  activity_log       │      │  → 10s timeout                           │
-│  user_profiles      │      │  → audit logged                          │
-└─────────────────────┘      └──────────────────────────────────────────┘
-           │
-┌──────────▼──────────┐      ┌─────────────────────────────────────────┐
-│  Redis (:6379)      │      │  packages/agents                         │
-│  BullMQ job queues  │      │  streamChat() — async generator          │
-│  Scheduler lock     │      │  Tool definitions (OpenAI function spec) │
-│                     │      │  buildContextBlock() — live fleet summary│
-└─────────────────────┘      │  GitHub Models API (GPT-4o-mini)         │
-                             │    → tool_call loop (max 5 rounds)       │
-                             │    → execute_query / get_fleet_health    │
-                             │    → trend_chart / get_analytics         │
-                             └─────────────────────────────────────────┘
+┌──────────▼──────────┐      ┌─────────────▼────────────────────────────┐
+│  Supabase (:8000)   │      │  DB Fleet (live adapters)                 │
+│  – Postgres 15      │      │  oracleAdapter  → Oracle 11g–23c          │
+│  – GoTrue auth      │      │    thin→thick auto-fallback (NJS-138)     │
+│    (:9999 internal) │      │    SYSDBA/SYSOPER privilege support       │
+│  – PostgREST API    │      │  mssqlAdapter   → SQL Server 2012–2022    │
+│  – Kong gateway     │      │    DMV-backed metrics, wait stats         │
+│    (auth routes:    │      │  mariadbAdapter → MariaDB 10.4+           │
+│     no key-auth —  │      │    InnoDB, replication, slow query        │
+│     GoTrue self-    │      │                                           │
+│     validates JWTs) │      │  executeQuery() on all three              │
+│                     │      │  → read-only SELECT only                  │
+│  tables:            │      │  → 10s timeout                            │
+│  connections        │      │  → audit logged to activity_log           │
+│  health_snapshots   │      └───────────────────────────────────────────┘
+│  alerts             │
+│  scripts            │      ┌─────────────────────────────────────────┐
+│  activity_log       │      │  packages/agents                         │
+│  user_profiles      │      │  streamChat() — async generator          │
+│  chat_sessions      │      │  Tool definitions (OpenAI function spec) │
+└─────────────────────┘      │  buildContextBlock() — live fleet summary│
+                             │  GitHub Models API (GPT-4o-mini)         │
+┌─────────────────────┐      │    → tool_call loop (max 5 rounds)       │
+│  Redis (:6379)      │      │    → execute_query / get_fleet_health    │
+│  BullMQ job queues  │      │    → trend_chart / get_analytics         │
+│  Scheduler lock     │      └─────────────────────────────────────────┘
+└─────────────────────┘
 ```
 
 ---
@@ -136,13 +194,15 @@ All analytics data is queryable via `/api/analytics` and surfaced in the Analyti
 ## Tech Stack
 
 ```
-Frontend    Next.js 15 · Tailwind CSS · shadcn/ui · Recharts
+Frontend    Next.js 15 · App Router · Tailwind CSS · shadcn/ui · Recharts · @supabase/ssr
 Backend     Node.js 22 · Express 5 · TypeScript (ESM)
+Auth        Supabase GoTrue (self-hosted) · invite-based signup · optional TOTP MFA
 Agents      OpenAI SDK · GitHub Models API (GPT-4o-mini) · tool calling loop
 Queue       BullMQ · Redis 7 · distributed leader election via SET NX
-App DB      Supabase (self-hosted Postgres 15 · GoTrue auth · PostgREST · Kong)
-DB Drivers  oracledb v6 · mssql · mysql2
-Infra       Docker Compose (dev / prod) · pnpm monorepo
+App DB      Supabase (self-hosted Postgres 15 · GoTrue · PostgREST · Kong)
+              Kong: auth routes have no key-auth — GoTrue validates its own JWTs
+DB Drivers  oracledb v6 (thin + thick) · mssql · mysql2
+Infra       Docker Compose (dev / prod) · pnpm monorepo · Turborepo
 ```
 
 ---
@@ -151,10 +211,13 @@ Infra       Docker Compose (dev / prod) · pnpm monorepo
 
 | Role | Permissions |
 |------|-------------|
-| `super_admin` | Full access — users, connections, scripts, production execution |
-| `dba` | Execute scripts, manage alerts, tool calling in bot, full analytics |
-| `analyst` | Read dashboard + analytics, bot chat read-only (no tool execution) |
-| `viewer` | Dashboard read-only, no bot access |
+| `super_admin` | Full access — user management, connections, scripts, production execution, all analytics |
+| `dba` | Execute scripts, manage alerts, tool calling in bot, full analytics, connection management |
+| `analyst` | Read dashboard + analytics, bot chat read-only (no tool execution), acknowledge alerts |
+| `viewer` | Dashboard read-only, no bot access, no alert actions |
+
+> Role is stored in `user_profiles.role` and cached in the API auth middleware (6-min TTL).
+> `super_admin` role is also written to GoTrue `app_metadata.role` for JWT-level verification.
 
 ---
 
@@ -170,19 +233,36 @@ adors/
 │   │       │   ├── chat/           # Bot Chat Hub (SSE)
 │   │       │   ├── alerts/         # Alerts Center
 │   │       │   ├── scripts/        # Script Library
-│   │       │   ├── sandbox/        # UAT Sandbox
+│   │       │   ├── sandbox/        # UAT Sandbox + connection CRUD
 │   │       │   ├── analytics/      # Analytics (fleet + per-connection)
-│   │       │   └── connections/    # Connections manager + detail panels
+│   │       │   ├── connections/    # Connections manager + detail panels
+│   │       │   ├── admin/users/    # User management (super_admin only)
+│   │       │   ├── login/          # Login + TOTP MFA challenge
+│   │       │   ├── onboarding/     # profile/ (invite accept) + mfa/ (TOTP setup)
+│   │       │   └── setup/          # First-run admin bootstrap
 │   │       ├── components/
 │   │       │   ├── dashboard/      # Health cards, gauges, activity feed
-│   │       │   ├── layout/         # Sidebar, nav
+│   │       │   ├── connections/    # Shared ConnectionPanel component
+│   │       │   ├── layout/         # Sidebar, nav, RoleGuard
 │   │       │   └── ui/             # shadcn base components
-│   │       └── lib/                # API client, Supabase browser client
+│   │       ├── lib/
+│   │       │   ├── api.ts          # Typed API client (all endpoints)
+│   │       │   └── supabase/       # browser.ts + server.ts clients
+│   │       └── middleware.ts       # JWT refresh + route guard (Kong-resilient)
 │   │
 │   └── api/                        # Express API server  (:4000)
 │       └── src/
 │           ├── index.ts            # App bootstrap, graceful shutdown
-│           ├── routes/             # REST + SSE endpoints
+│           ├── routes/
+│           │   ├── me.ts           # GET + PATCH /api/me
+│           │   ├── connections.ts  # Connection CRUD + scan trigger
+│           │   ├── alerts.ts       # Alert list + ack/resolve
+│           │   ├── activity.ts     # Activity feed
+│           │   ├── analytics.ts    # Fleet + per-connection trends
+│           │   ├── agents.ts       # SSE chat + tool calling
+│           │   ├── sandbox.ts      # Script execution engine
+│           │   ├── scripts.ts      # Script catalog
+│           │   └── admin.ts        # User management (invite, roles, deactivate)
 │           ├── services/
 │           │   ├── healthScanner.ts  # Scan orchestration, batching
 │           │   ├── connectionService.ts
@@ -208,14 +288,14 @@ adors/
 │   │   └── src/index.ts            # streamChat(), tool definitions,
 │   │                               # buildContextBlock(), fleet context
 │   ├── db/
-│   │   ├── migrations/             # SQL schema migrations (001–004)
+│   │   ├── migrations/             # SQL schema migrations (001–006)
 │   │   └── seeds/                  # Dev seed data
 │   └── shared/                     # Shared TypeScript types
 │       └── src/index.ts            # DbConnection, HealthSnapshot, Alert, etc.
 │
 ├── infra/
 │   ├── docker/                     # Per-service Dockerfiles
-│   ├── compose/                    # docker-compose.dev.yml / prod.yml
+│   ├── compose/                    # docker-compose.dev.yml / prod.yml + kong.yml
 │   └── nginx/                      # Reverse proxy (dev.conf)
 │
 └── CONTEXT.md                      # Dev session context (paste to restore state)
@@ -231,11 +311,12 @@ adors/
 | **Phase 2** | ✅ | Live DB adapters — Oracle (11g+), MSSQL, MariaDB |
 | **Phase 3** | ✅ | Analytics, activity feed, alerts, scripts, sandbox (shell pages) |
 | **Phase 4** | ✅ | Bot Chat Hub — SSE streaming, live fleet context injection, worker flood prevention |
-| **Phase 5** | 🔨 **Active** | Agentic tool calling — bots can run queries, return charts, diagnose live data |
-| **Phase 6** | Next | Script execution engine — sandbox verify → prod exec, audit trail |
-| **Phase 7** | Planned | User management — invite, role assignment, profile |
-| **Phase 8** | Planned | WhatsApp (Baileys) + Teams notifications, alert webhooks |
-| **Phase 9** | Planned | Docker prod hardening, security audit, light theme |
+| **Phase 5** | ✅ | Agentic tool calling — bots run queries, return charts, diagnose live data |
+| **Phase 6** | ✅ | Script execution engine — sandbox verify → prod exec, audit trail |
+| **Phase 7** | ✅ | User management — invite flow, role assignment, admin page, onboarding |
+| **Phase 8** | Next | Settings page — user profile, password change, TOTP enrol/unenrol |
+| **Phase 9** | Next | WhatsApp (Baileys) + Teams notifications, alert webhooks |
+| **Phase 10** | Planned | Docker prod hardening, security audit, AAL2 enforcement |
 
 ---
 
@@ -274,9 +355,28 @@ GITHUB_TOKEN=           # Classic PAT — no scopes needed for GitHub Models
 SUPABASE_URL=           # http://localhost:8000 (Kong gateway)
 SUPABASE_SERVICE_KEY=   # Supabase service role JWT
 SUPABASE_JWT_SECRET=    # Must match GoTrue GOTRUE_JWT_SECRET
+SUPABASE_ANON_KEY=      # Supabase anon JWT (must match kong.yml consumer key exactly)
 REDIS_URL=              # redis://localhost:6379
 DATABASE_URL=           # postgresql://postgres:...@localhost:5432/postgres
+WEB_URL=                # http://localhost:3002 (used in invite email links)
+RESEND_API_KEY=         # Optional — Resend email delivery
+RESEND_FROM=            # Optional — verified sender domain (e.g. noreply@yourdomain.com)
+                        # If not set, invite flow returns a copy-link modal instead of email
 ```
+
+> ⚠️ `SUPABASE_ANON_KEY` in `apps/api/.env` must exactly match the key in `infra/compose/kong.yml`
+> under `consumers[anon].keyauth_credentials[0].key` — any mismatch causes 401 on all browser auth calls.
+
+---
+
+## First-Run Setup
+
+1. Start the stack and run migrations (`pnpm db:migrate && pnpm db:seed`)
+2. Navigate to `http://localhost:3002/setup`
+3. Create the first `super_admin` account
+4. Log in, go to **Admin → User Management**, invite team members
+5. Share the invite link (shown in copy-link modal if Resend is not configured)
+6. Invited users open the link → set password → land on dashboard
 
 DB credentials are stored per-connection via `credentials_ref` and resolved at scan time — never in top-level env vars in production.
 

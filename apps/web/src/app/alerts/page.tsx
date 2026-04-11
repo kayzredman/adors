@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Bell, CheckCircle2, AlertTriangle, Info, Filter } from 'lucide-react'
 import { cn, formatRelativeTime, severityColor } from '@/lib/utils'
 import { api } from '@/lib/api'
+import { useAuth } from '@/components/providers/AuthProvider'
 
 type Alert = {
   id: string
@@ -19,6 +20,9 @@ const SEVERITY_FILTERS = ['all', 'critical', 'warning', 'info'] as const
 const STATUS_FILTERS   = ['all', 'active', 'acknowledged', 'resolved'] as const
 
 export default function AlertsPage() {
+  const { role } = useAuth()
+  const canAcknowledge = role === 'analyst' || role === 'dba' || role === 'super_admin'
+  const canResolve     = role === 'dba' || role === 'super_admin'
   const [alerts,   setAlerts]   = useState<Alert[]>([])
   const [loading,  setLoading]  = useState(true)
   const [counts,   setCounts]   = useState({ critical: 0, warning: 0, info: 0, total: 0 })
@@ -128,7 +132,7 @@ export default function AlertsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {alerts.map(alert => (
-                <AlertRow key={alert.id} alert={alert} onAcknowledge={acknowledge} onResolve={resolve} />
+                <AlertRow key={alert.id} alert={alert} onAcknowledge={acknowledge} onResolve={resolve} canAcknowledge={canAcknowledge} canResolve={canResolve} />
               ))}
             </tbody>
           </table>
@@ -138,10 +142,12 @@ export default function AlertsPage() {
   )
 }
 
-function AlertRow({ alert, onAcknowledge, onResolve }: {
+function AlertRow({ alert, onAcknowledge, onResolve, canAcknowledge, canResolve }: {
   alert: Alert
   onAcknowledge: (id: string) => void
   onResolve:     (id: string) => void
+  canAcknowledge: boolean
+  canResolve:     boolean
 }) {
   const [busy, setBusy] = useState(false)
 
@@ -181,13 +187,13 @@ function AlertRow({ alert, onAcknowledge, onResolve }: {
       </td>
       <td className="px-5 py-3.5">
         <div className="flex gap-2">
-          {alert.status === 'active' && (
+          {alert.status === 'active' && canAcknowledge && (
             <button disabled={busy} onClick={async () => { setBusy(true); await onAcknowledge(alert.id); setBusy(false) }}
               className="px-2.5 py-1 text-xs font-medium rounded border border-warning/40 text-warning hover:bg-warning/10 transition-colors disabled:opacity-50">
               Acknowledge
             </button>
           )}
-          {alert.status !== 'resolved' && (
+          {alert.status !== 'resolved' && canResolve && (
             <button disabled={busy} onClick={async () => { setBusy(true); await onResolve(alert.id); setBusy(false) }}
               className="px-2.5 py-1 text-xs font-medium rounded border border-success/40 text-success hover:bg-success/10 transition-colors disabled:opacity-50">
               Resolve

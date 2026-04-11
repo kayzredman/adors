@@ -32,6 +32,12 @@ interface SupabaseJwtPayload {
 const roleCache = new Map<string, { role: UserRole; expiresAt: number }>()
 const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
+/** Call this when a user's role or deactivation state changes so the next
+ *  request re-fetches from DB instead of serving a stale cached role. */
+export function invalidateRoleCache(userId: string): void {
+  roleCache.delete(userId)
+}
+
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization
   if (!authHeader?.startsWith('Bearer ')) {
@@ -63,17 +69,17 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const { supabase } = await import('../config/supabase.js')
     const { data: profile, error } = await supabase
       .from('user_profiles')
-      .select('role')
+      .select('role, deactivated_at')
       .eq('id', userId)
       .single()
 
     if (error || !profile) {
       // Auto-create: any valid Supabase-authenticated user gets a default
-      // analyst profile so a missing row never blocks legitimate users.
+      // viewer profile — least-privilege default, admin can grant more.
       const { data: newProfile, error: upsertErr } = await supabase
         .from('user_profiles')
-        .upsert({ id: userId, role: 'analyst' }, { onConflict: 'id' })
-        .select('role')
+        .upsert({ id: userId, role: 'viewer' }, { onConflict: 'id' })
+        .select('role, deactivated_at')
         .single()
       if (upsertErr || !newProfile) {
         res.status(403).json({ error: 'User profile not found' })
@@ -83,6 +89,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       roleCache.set(userId, { role, expiresAt: Date.now() + CACHE_TTL_MS })
       req.user = { id: userId, email, role }
       next()
+      return
+    }
+
+    // Block deactivated users at the auth layer, not just /api/me
+    if ((profile as any).deactivated_at) {
+      res.status(403).json({ error: 'Account has been deactivated' })
       return
     }
 

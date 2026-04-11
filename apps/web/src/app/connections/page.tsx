@@ -380,6 +380,6 @@ export default function ConnectionsPage() {
 }
 
 function DbIcon({ type }: { type: string }) {
-  const colors: Record<string, string> = { oracle: 'bg-[#F80000]', mssql: 'bg-[#CC2927]', mariadb: 'bg-blue-500' }
+  const colors: Record<string, string> = { oracle: 'bg-[#F80000]', mssql: 'bg-[#CC2927]', mariadb: 'bg-[#E8940A]' }
   return <span className={cn('w-2 h-2 rounded-full shrink-0', colors[type] ?? 'bg-muted-foreground')} />
 }

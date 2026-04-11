@@ -7,7 +7,7 @@ _transform: true
 consumers:
   - username: anon
     keyauth_credentials:
-      - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE
+      - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4
   - username: service_role
     keyauth_credentials:
       - key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q
@@ -67,7 +67,8 @@ services:
     plugins:
       - name: cors
 
-  ## Secure Auth routes
+  ## Auth routes — no key-auth here; GoTrue validates its own JWTs.
+  ## Removing key-auth eliminates the #1 cause of silent auth failures in dev.
   - name: auth-v1
     url: http://supabase-auth:9999/
     routes:
@@ -77,15 +78,6 @@ services:
           - /auth/v1/
     plugins:
       - name: cors
-      - name: key-auth
-        config:
-          hide_credentials: false
-      - name: acl
-        config:
-          hide_groups_header: true
-          allow:
-            - admin
-            - anon
 
   ## Secure PostgREST routes
   - name: rest-v1

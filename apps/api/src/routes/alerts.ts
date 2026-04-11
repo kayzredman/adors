@@ -24,7 +24,7 @@ router.get('/', requireAuth, async (req, res) => {
       query = query.eq('connection_id', req.query.connection_id as string)
     }
 
-    const limit = Number(req.query.limit) || 50
+    const limit = Math.min(Number(req.query.limit) || 50, 500)
     query = query.limit(limit)
 
     const { data, error } = await query

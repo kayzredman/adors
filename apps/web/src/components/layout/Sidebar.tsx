@@ -16,26 +16,38 @@ import {
   LogOut,
   Menu,
   X,
+  Users,
+  UserCircle2,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
 import { AdorsLogo } from '@/components/brand/AdorsLogo'
 import { createClient } from '@/lib/supabase/browser'
+import { useAuth } from '@/components/providers/AuthProvider'
 
 const NAV_ITEMS = [
-  { href: '/',            label: 'Dashboard',    icon: LayoutDashboard },
-  { href: '/analytics',   label: 'Analytics',    icon: BarChart2       },
-  { href: '/chat',        label: 'Bot Chat Hub', icon: MessageSquare   },
-  { href: '/alerts',      label: 'Alerts Center', icon: Bell           },
-  { href: '/scripts',     label: 'Script Library', icon: BookOpen      },
-  { href: '/sandbox',     label: 'UAT Sandbox',   icon: FlaskConical   },
-  { href: '/connections', label: 'Connections',   icon: Database       },
+  { href: '/',            label: 'Dashboard',     icon: LayoutDashboard, minRole: 'viewer'  },
+  { href: '/analytics',   label: 'Analytics',     icon: BarChart2,       minRole: 'viewer'  },
+  { href: '/chat',        label: 'Bot Chat Hub',  icon: MessageSquare,   minRole: 'viewer'  },
+  { href: '/alerts',      label: 'Alerts Center', icon: Bell,            minRole: 'viewer'  },
+  { href: '/scripts',     label: 'Script Library', icon: BookOpen,       minRole: 'analyst' },
+  { href: '/sandbox',     label: 'UAT Sandbox',   icon: FlaskConical,    minRole: 'dba'     },
+  { href: '/connections', label: 'Connections',   icon: Database,        minRole: 'analyst' },
 ]
+
+const ROLE_LEVEL: Record<string, number> = {
+  viewer: 1, analyst: 2, dba: 3, super_admin: 4,
+}
+
+function canAccess(minRole: string, userRole: string | null): boolean {
+  return (ROLE_LEVEL[userRole ?? 'viewer'] ?? 0) >= (ROLE_LEVEL[minRole] ?? 99)
+}
 
 export function Sidebar() {
   const pathname = usePathname()
   const router   = useRouter()
   const { theme, setTheme } = useTheme()
+  const { role, user } = useAuth()
   const supabase = createClient()
   const [open, setOpen] = useState(false)
 
@@ -72,7 +84,7 @@ export function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
+        {NAV_ITEMS.filter(item => canAccess(item.minRole, role)).map(({ href, label, icon: Icon }) => {
           const active = pathname === href || (href !== '/' && pathname.startsWith(href))
           return (
             <Link
@@ -91,10 +103,46 @@ export function Sidebar() {
             </Link>
           )
         })}
+
+        {role === 'super_admin' && (
+          <>
+            <div className="pt-2 pb-1 px-1">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">Admin</p>
+            </div>
+            <Link
+              href="/admin/users"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                pathname.startsWith('/admin')
+                  ? 'bg-brand-500/10 text-brand-400'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <Users className="w-4 h-4 shrink-0" />
+              User Management
+            </Link>
+          </>
+        )}
       </nav>
 
       {/* Bottom controls */}
-      <div className="px-5 py-4 border-t border-border space-y-3">
+      <div className="px-4 py-4 border-t border-border space-y-3">
+        {/* Logged-in user */}
+        {user && (
+          <div className="flex items-center gap-2.5 px-1 py-1.5 rounded-lg">
+            <div className="w-7 h-7 rounded-full bg-brand-500/20 border border-brand-500/30 flex items-center justify-center shrink-0">
+              <UserCircle2 className="w-4 h-4 text-brand-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-foreground truncate">
+                {user.user_metadata?.full_name || user.email?.split('@')[0] || 'You'}
+              </p>
+              <p className="text-[10px] text-muted-foreground truncate">
+                {{ viewer: 'Viewer', analyst: 'Analyst', dba: 'DBA', super_admin: 'Super Admin' }[role ?? 'viewer'] ?? role}
+              </p>
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className="w-2 h-2 rounded-full bg-success animate-pulse-slow" />
           SYSTEM SCANNING

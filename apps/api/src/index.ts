@@ -9,7 +9,7 @@ import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
 import morgan from 'morgan'
-import { defaultLimiter } from './middleware/rateLimit.js'
+import { defaultLimiter, agentLimiter } from './middleware/rateLimit.js'
 import connectionsRouter from './routes/connections.js'
 import alertsRouter from './routes/alerts.js'
 import activityRouter from './routes/activity.js'
@@ -18,6 +18,7 @@ import sandboxRouter from './routes/sandbox.js'
 import meRouter from './routes/me.js'
 import analyticsRouter from './routes/analytics.js'
 import agentsRouter from './routes/agents.js'
+import adminRouter, { profileRouter } from './routes/admin.js'
 import { startHealthScanScheduler, createHealthScanWorker, closeWorker, releaseSchedulerLock } from './workers/healthScanWorker.js'
 
 const app = express()
@@ -25,8 +26,21 @@ const PORT = process.env.PORT ?? 4000
 
 // ─── Security Middleware ──────────────────────────────────────────────────────
 app.use(helmet())
+const allowedOrigins = (process.env.WEB_URL ?? 'http://localhost:3002')
+  .split(',')
+  .map(o => o.trim())
+
 app.use(cors({
-  origin: process.env.WEB_URL ?? 'http://localhost:3002',
+  origin: (origin, cb) => {
+    // Allow requests with no origin (curl, Postman, server-to-server)
+    if (!origin) return cb(null, true)
+    // In dev, allow any localhost port
+    if (process.env.NODE_ENV !== 'production' && /^http:\/\/localhost:\d+$/.test(origin)) {
+      return cb(null, true)
+    }
+    if (allowedOrigins.includes(origin)) return cb(null, true)
+    cb(new Error(`CORS: origin ${origin} not allowed`))
+  },
   credentials: true,
 }))
 app.use(express.json({ limit: '1mb' }))
@@ -46,7 +60,9 @@ app.use('/api/scripts',     scriptsRouter)
 app.use('/api/sandbox',     sandboxRouter)
 app.use('/api/me',          meRouter)
 app.use('/api/analytics',   analyticsRouter)
-app.use('/api/agents',      agentsRouter)
+app.use('/api/agents',      agentLimiter, agentsRouter)
+app.use('/api/admin',       adminRouter)
+app.use('/api/admin',       profileRouter)
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((_req, res) => {

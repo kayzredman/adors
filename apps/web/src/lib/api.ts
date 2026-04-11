@@ -28,7 +28,7 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  me: () => apiFetch<{ data: { id: string; email: string; role: string } }>('/api/me'),
+  me: () => apiFetch<{ data: { id: string; email: string; role: string; onboarded: boolean } }>('/api/me'),
   connections: {
     list:   (withHealth = false) =>
       apiFetch<{ data: unknown[] }>(`/api/connections${withHealth ? '?health=true' : ''}`),
@@ -49,7 +49,7 @@ export const api = {
         body: JSON.stringify(body),
       }),
     create: (body: Record<string, unknown>) =>
-      apiFetch<{ data: unknown }>('/api/connections', {
+      apiFetch<{ data: { id: string } }>('/api/connections', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
@@ -77,7 +77,12 @@ export const api = {
       const qs = params ? '?' + new URLSearchParams(params).toString() : ''
       return apiFetch<{ data: unknown[] }>(`/api/scripts${qs}`)
     },
-    get: (id: string) => apiFetch<{ data: unknown }>(`/api/scripts/${id}`),
+    get:         (id: string) => apiFetch<{ data: unknown }>(`/api/scripts/${id}`),
+    executeProd: (id: string, connectionId: string) =>
+      apiFetch<{ data: { exec_ms: number; row_count: number; columns: string[]; rows: Record<string, unknown>[]; script_name: string; connection_name: string } }>(
+        `/api/scripts/${id}/execute-prod`,
+        { method: 'POST', body: JSON.stringify({ connection_id: connectionId }) },
+      ),
   },
   sandbox: {
     envs:   () => apiFetch<{ data: unknown[] }>('/api/sandbox/envs'),
@@ -94,5 +99,41 @@ export const api = {
       apiFetch<{ data: any }>(`/api/analytics/fleet?days=${days}`),
     connection: (id: string, days = 30) =>
       apiFetch<{ data: any }>(`/api/analytics/${id}?days=${days}`),
+  },
+  admin: {
+    listUsers: () =>
+      apiFetch<{ data: { id: string; email: string; full_name: string; role: string; onboarded: boolean; deactivated_at: string | null; created_at: string }[] }>('/api/admin/users'),
+    invite: (body: { email: string; role: string; full_name?: string }) =>
+      apiFetch<{ data: unknown; message: string; inviteLink?: string }>('/api/admin/users/invite', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateRole: (id: string, role: string) =>
+      apiFetch<{ data: unknown; message: string }>(`/api/admin/users/${id}/role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      }),
+    deactivate: (id: string) =>
+      apiFetch<{ data: unknown; message: string }>(`/api/admin/users/${id}/deactivate`, {
+        method: 'PATCH',
+      }),
+    reactivate: (id: string) =>
+      apiFetch<{ data: unknown; message: string }>(`/api/admin/users/${id}/reactivate`, {
+        method: 'PATCH',
+      }),
+    updateName: (id: string, full_name: string) =>
+      apiFetch<{ data: unknown; message: string }>(`/api/admin/users/${id}/name`, {
+        method: 'PATCH',
+        body: JSON.stringify({ full_name }),
+      }),
+    reinvite: (id: string) =>
+      apiFetch<{ message: string; inviteLink?: string }>(`/api/admin/users/${id}/reinvite`, {
+        method: 'POST',
+      }),
+    completeProfile: (full_name: string) =>
+      apiFetch<{ data: unknown; message: string }>('/api/admin/me/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({ full_name }),
+      }),
   },
 }

@@ -47,12 +47,12 @@ router.get('/runs', requireAuth, async (req, res) => {
     const { data, error } = await supabase
       .from('sandbox_runs')
       .select(`
-        id, status, output_log, cpu_impact_pct, exec_duration_ms,
-        tested_by, tested_at,
+        id, status, output, cpu_impact_pct, exec_time_ms,
+        triggered_by, run_at,
         scripts (id, name),
-        connections (id, name, db_type)
+        connections!uat_connection_id (id, name, db_type)
       `)
-      .order('tested_at', { ascending: false })
+      .order('run_at', { ascending: false })
       .limit(50)
 
     if (error) throw error
@@ -65,10 +65,10 @@ router.get('/runs', requireAuth, async (req, res) => {
       connection_name: r.connections?.name,
       db_type:         r.connections?.db_type,
       status:          r.status,
-      output_log:      r.output_log,
+      output:          r.output,
       cpu_impact_pct:  r.cpu_impact_pct,
-      exec_duration_ms: r.exec_duration_ms,
-      tested_at:       r.tested_at,
+      exec_time_ms:    r.exec_time_ms,
+      run_at:          r.run_at,
     }))
 
     res.json({ data: runs })
@@ -83,7 +83,7 @@ const runSchema = z.object({
   connection_id: z.string().uuid(),
 })
 
-router.post('/run', requireDBA, async (req, res) => {
+router.post('/run', requireAuth, requireDBA, async (req, res) => {
   const parsed = runSchema.safeParse(req.body)
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() })
 
@@ -117,10 +117,9 @@ router.post('/run', requireDBA, async (req, res) => {
       .from('sandbox_runs')
       .insert({
         script_id,
-        connection_id,
-        status:    'pending',
-        tested_by: user.id,
-        tested_at: new Date().toISOString(),
+        uat_connection_id: connection_id,
+        status:            'running',
+        triggered_by:      user.id,
       })
       .select()
       .single()
@@ -205,10 +204,10 @@ async function executeScriptAsync(
     ].join('\n')
 
     await supabase.from('sandbox_runs').update({
-      status:           'success',
-      output_log:       outputLog,
-      exec_duration_ms: duration,
-      cpu_impact_pct:   null,
+      status:        'success',
+      output:        outputLog,
+      exec_time_ms:  duration,
+      cpu_impact_pct: null,
     }).eq('id', runId)
 
     await logActivity({
@@ -221,8 +220,8 @@ async function executeScriptAsync(
     })
   } catch (err: any) {
     await supabase.from('sandbox_runs').update({
-      status:     'failure',
-      output_log: `ERROR: ${err.message}`,
+      status: 'failed',
+      output: `ERROR: ${err.message}`,
     }).eq('id', runId)
 
     await logActivity({

@@ -47,7 +47,7 @@ const STATUS_MAP = {
 const DB_TYPE_COLORS: Record<string, string> = {
   oracle:  'text-[#F80000] bg-[#F80000]/10 border-[#F80000]/30',
   mssql:   'text-[#0078D4] bg-[#0078D4]/10 border-[#0078D4]/30',
-  mariadb: 'text-[#C0765A] bg-[#C0765A]/10 border-[#C0765A]/30',
+  mariadb: 'text-[#E8940A] bg-[#E8940A]/10 border-[#E8940A]/30',
 }
 
 export default function SandboxPage() {

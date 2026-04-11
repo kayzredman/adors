@@ -68,7 +68,7 @@ export function ConnectionPanel({
   connection?:        ConnectionForPanel
   defaultEnvironment?: 'production' | 'uat'
   onClose:            () => void
-  onSaved:            () => void
+  onSaved:            (id?: string) => void
 }) {
   const [form, setForm] = useState<FormState>({
     name:             connection?.name          ?? '',
@@ -132,7 +132,7 @@ export function ConnectionPanel({
     setError('')
     try {
       if (mode === 'create') {
-        await api.connections.create({
+        const res = await api.connections.create({
           name:             form.name,
           db_type:          form.db_type,
           environment:      form.environment,
@@ -144,6 +144,8 @@ export function ConnectionPanel({
           password:         form.password || undefined,
           oracle_privilege: (form.db_type === 'oracle' && form.oracle_privilege) ? form.oracle_privilege : undefined,
         })
+        onSaved((res.data as { id?: string })?.id)
+        return
       } else {
         await api.connections.update(connection!.id, {
           name:             form.name,
@@ -156,8 +158,8 @@ export function ConnectionPanel({
           username:         (form.username && form.password) ? form.username : undefined,
           password:         (form.username && form.password) ? form.password : undefined,
         })
+        onSaved()
       }
-      onSaved()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
     } finally {

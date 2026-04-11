@@ -301,10 +301,30 @@ function ChatColumn({ botId }: { botId: BotId }) {
     const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: text }
     setMessages(prev => [...prev, userMsg])
 
-    // Build message history (exclude intro messages)
+    // Build message history (exclude intro messages).
+    // For bot messages that executed tool calls, embed a compact result summary
+    // into the assistant content so the LLM retains that context on follow-up turns.
     const history = [...messages, userMsg]
       .filter(m => !m.id.startsWith('intro-'))
-      .map(m => ({ role: m.role === 'bot' ? 'assistant' as const : 'user' as const, content: stripControlTokens(m.content) }))
+      .map(m => {
+        if (m.role !== 'bot') return { role: 'user' as const, content: m.content }
+        let content = stripControlTokens(m.content)
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          const summaries = m.toolCalls
+            .filter(tc => tc.status === 'done')
+            .map(tc => {
+              if (tc.name === 'execute_query' && tc.rows && tc.columns) {
+                const preview = tc.rows.slice(0, 8).map(row =>
+                  tc.columns!.map(c => `${c}=${row[c] ?? 'null'}`).join(', ')
+                ).join(' | ')
+                return `[Tool: ${tc.name}(${tc.connectionName ?? ''}) → ${tc.rowCount} rows${tc.rows.length > 0 ? ': ' + preview : ''}]`
+              }
+              return `[Tool: ${tc.name}(${tc.connectionName ?? ''}) → completed]`
+            })
+          if (summaries.length > 0) content = summaries.join('\n') + '\n\n' + content
+        }
+        return { role: 'assistant' as const, content }
+      })
 
     const { data } = await createClient().auth.getSession()
     const token = data.session?.access_token ?? ''

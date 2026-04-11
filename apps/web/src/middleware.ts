@@ -22,16 +22,29 @@ export async function middleware(request: NextRequest) {
     },
   )
 
-  // Refresh expired sessions — MUST be called before any redirect checks
-  const { data: { user } } = await supabase.auth.getUser()
+  // Verify session with the server. If Kong/GoTrue is unreachable (e.g. stack
+  // cold-starting), fall back to the cookie session so the app stays usable
+  // instead of redirecting every authenticated user to /login.
+  let user = null
+  try {
+    const result = await supabase.auth.getUser()
+    user = result.data.user
+  } catch {
+    // Network error — trust the local cookie session as best-effort
+    const { data: { session } } = await supabase.auth.getSession()
+    user = session?.user ?? null
+  }
 
-  const isLoginPage  = request.nextUrl.pathname.startsWith('/login')
-  const isApiRoute   = request.nextUrl.pathname.startsWith('/api/')
+  const isLoginPage      = request.nextUrl.pathname.startsWith('/login')
+  const isApiRoute       = request.nextUrl.pathname.startsWith('/api/')
+  const isSetupPage      = request.nextUrl.pathname.startsWith('/setup')
+  const isOnboardingPage = request.nextUrl.pathname.startsWith('/onboarding')
 
-  // Next.js API routes handle their own auth — don't redirect them
+  // Next.js API routes, setup wizard, and onboarding handle their own auth
   if (isApiRoute) return response
+  if (isOnboardingPage) return response
 
-  if (!user && !isLoginPage) {
+  if (!user && !isLoginPage && !isSetupPage) {
     const loginUrl = request.nextUrl.clone()
     loginUrl.pathname = '/login'
     return NextResponse.redirect(loginUrl)

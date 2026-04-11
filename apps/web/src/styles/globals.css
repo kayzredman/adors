@@ -5,9 +5,9 @@
 @layer base {
   :root {
     /* Light theme — blue-grey tinted, cards lift off background */
-    --background:    220 18% 96%;   /* subtle blue-grey — no glare */
+    --background:    220 18% 88%;   /* dimmed blue-grey */
     --foreground:    222 47% 11%;
-    --card:          0 0% 100%;     /* pure white cards stand out from bg */
+    --card:          0 0% 97%;      /* near-white cards lift off bg */
     --card-foreground: 222 47% 11%;
     --popover:       0 0% 100%;
     --popover-foreground: 222 47% 11%;

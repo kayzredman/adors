@@ -40,7 +40,7 @@ export class MssqlAdapter implements DbAdapter {
     })
 
     try {
-      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState] = await Promise.all([
+      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState, filegroupBreakdown] = await Promise.all([
         this.#queryVersion(pool),
         this.#queryMemory(pool),
         this.#querySessions(pool),
@@ -50,6 +50,7 @@ export class MssqlAdapter implements DbAdapter {
         this.#queryBackups(pool).catch(() => []),
         this.#queryDiskMounts(pool).catch(() => []),
         this.#queryHaState(pool).catch(() => ({ type: 'none', details: [] })),
+        this.#queryFilegroupBreakdown(pool).catch(() => []),
       ])
 
       // Return flat keys matching mock adapter shape (MssqlDetailPanel reads these directly)
@@ -94,6 +95,8 @@ export class MssqlAdapter implements DbAdapter {
         backup_history:            backups,
         // Disk / volume utilization
         disk_mounts:               diskMounts,
+        // Per-filegroup disk breakdown
+        filegroup_breakdown:       filegroupBreakdown,
         // HA / Replication state
         ha_state:                  haState,
 
@@ -484,8 +487,43 @@ export class MssqlAdapter implements DbAdapter {
     }))
   }
 
-  async #queryCpuIo(pool: any) {
-    const perf = await pool.request().query(`
+  async #queryFilegroupBreakdown(pool: any) {
+    // Per-filegroup and per-file size breakdown (SQL Server 2005+)
+    const r = await pool.request().query(`
+      SELECT
+        DB_NAME(mf.database_id)                                          AS db_name,
+        ISNULL(fg.name, CASE mf.type WHEN 1 THEN 'LOG' ELSE 'UNKNOWN' END) AS filegroup_name,
+        fg.type_desc                                                     AS fg_type,
+        mf.name                                                          AS logical_name,
+        mf.physical_name                                                 AS physical_name,
+        ROUND(CAST(mf.size AS float) * 8 / 1048576, 2)                  AS allocated_gb,
+        ROUND(
+          CAST(FILEPROPERTY(mf.name, 'SpaceUsed') AS float) * 8 / 1048576, 2
+        )                                                                AS used_gb,
+        CASE mf.is_percent_growth WHEN 1
+          THEN CAST(mf.growth AS varchar) + '%'
+          ELSE CAST(mf.growth * 8 / 1024 AS varchar) + ' MB'
+        END                                                              AS auto_growth
+      FROM sys.master_files mf
+      LEFT JOIN sys.filegroups fg
+             ON fg.data_space_id = mf.data_space_id
+            AND fg.database_id   = mf.database_id
+      WHERE mf.state = 0   -- ONLINE files only
+      ORDER BY db_name, filegroup_name, mf.name
+    `)
+    return r.recordset.map((row: any) => ({
+      db_name:        row.db_name,
+      filegroup_name: row.filegroup_name,
+      fg_type:        row.fg_type ?? null,
+      logical_name:   row.logical_name,
+      physical_name:  row.physical_name,
+      allocated_gb:   Number(row.allocated_gb ?? 0),
+      used_gb:        Number(row.used_gb ?? 0),
+      auto_growth:    row.auto_growth,
+    }))
+  }
+
+  async #queryCpuIo(pool: any) {    const perf = await pool.request().query(`
       SELECT counter_name, cntr_value
       FROM sys.dm_os_performance_counters
       WHERE counter_name IN (

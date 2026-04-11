@@ -10,6 +10,13 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'ADORS — Mission Control',
   description: 'Agentic Database Observability & Remediation System',
+  icons: {
+    icon: [
+      { url: '/logo-icon.png', type: 'image/png' },
+      { url: '/favicon.svg',   type: 'image/svg+xml' },
+    ],
+    apple: '/logo-icon.png',
+  },
 }
 
 // This layout wraps all routes EXCEPT /login which has its own layout

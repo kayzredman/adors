@@ -6,7 +6,7 @@ const router = Router()
 
 router.get('/', requireAuth, async (req, res) => {
   try {
-    const limit = Number(req.query.limit) || 20
+    const limit = Math.min(Number(req.query.limit) || 20, 200)
     const data = await getRecentActivity(limit)
     res.json({ data })
   } catch (err) {

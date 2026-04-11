@@ -19,7 +19,7 @@ export interface DbAdapter {
 }
 
 export interface DbCredentials {
-  host:     string
+  grehost:     string
   port:     number
   database: string        // service name / db name / schema
   username: string

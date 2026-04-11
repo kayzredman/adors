@@ -323,6 +323,59 @@ export function MssqlDetailPanel({ metrics: m, name }: MssqlDetailPanelProps) {
         </div>
       )}
 
+      {/* ── Per-Filegroup Disk Breakdown ─────────────────────────── */}
+      {(m.filegroup_breakdown ?? []).length > 0 && (() => {
+        const rows = m.filegroup_breakdown as any[]
+        // Group by db_name → filegroup_name
+        const byDb = rows.reduce((acc: Record<string, Record<string, any[]>>, row: any) => {
+          if (!acc[row.db_name]) acc[row.db_name] = {}
+          if (!acc[row.db_name][row.filegroup_name]) acc[row.db_name][row.filegroup_name] = []
+          acc[row.db_name][row.filegroup_name].push(row)
+          return acc
+        }, {})
+        return (
+          <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Filegroup Disk Breakdown
+            </p>
+            {Object.entries(byDb).map(([dbName, groups]) => (
+              <div key={dbName} className="space-y-3">
+                <p className="text-xs font-mono font-semibold text-foreground border-b border-border pb-1">{dbName}</p>
+                {Object.entries(groups).map(([fgName, files]) => {
+                  const totalAlloc = (files as any[]).reduce((s, f) => s + f.allocated_gb, 0)
+                  const totalUsed  = (files as any[]).reduce((s, f) => s + f.used_gb, 0)
+                  const usedPct    = totalAlloc > 0 ? Math.round((totalUsed / totalAlloc) * 100) : 0
+                  return (
+                    <div key={fgName} className="space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold text-foreground">{fgName}</span>
+                        <span className="text-muted-foreground tabular-nums">
+                          {totalUsed.toFixed(2)} / {totalAlloc.toFixed(2)} GB ({usedPct}%)
+                        </span>
+                      </div>
+                      <div className="bg-muted rounded-full h-1.5 overflow-hidden">
+                        <div
+                          className={`h-1.5 rounded-full transition-all ${usedPct >= 90 ? 'bg-critical' : usedPct >= 75 ? 'bg-warning' : 'bg-brand-400'}`}
+                          style={{ width: `${Math.min(100, usedPct)}%` }}
+                        />
+                      </div>
+                      <div className="pl-2 space-y-1">
+                        {(files as any[]).map((f: any) => (
+                          <div key={f.logical_name} className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span className="font-mono truncate max-w-[55%]" title={f.physical_name}>{f.logical_name}</span>
+                            <span className="tabular-nums">{f.used_gb.toFixed(2)} / {f.allocated_gb.toFixed(2)} GB</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
       {/* ── Backup History ───────────────────────────────────────── */}
       <div className="rounded-xl border border-border bg-card p-4 space-y-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Backup History</p>
