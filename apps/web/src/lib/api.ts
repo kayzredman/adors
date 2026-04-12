@@ -169,4 +169,26 @@ export const api = {
         body: JSON.stringify({ factor_id }),
       }),
   },
+  notifications: {
+    listChannels: () =>
+      apiFetch<{ data: any[] }>('/api/notifications/channels'),
+    createChannel: (body: { type: string; name: string; config?: Record<string, unknown>; enabled?: boolean }) =>
+      apiFetch<{ data: any }>('/api/notifications/channels', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateChannel: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ data: any }>(`/api/notifications/channels/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    deleteChannel: (id: string) =>
+      apiFetch<{ message: string }>(`/api/notifications/channels/${id}`, {
+        method: 'DELETE',
+      }),
+    testChannel: (id: string) =>
+      apiFetch<{ message: string }>(`/api/notifications/channels/${id}/test`, {
+        method: 'POST',
+      }),
+  },
 }

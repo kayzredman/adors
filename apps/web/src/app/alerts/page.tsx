@@ -1,10 +1,11 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Bell, CheckCircle2, AlertTriangle, Info, Filter } from 'lucide-react'
+import { Bell, CheckCircle2, AlertTriangle, Info, Filter, Settings2 } from 'lucide-react'
 import { cn, formatRelativeTime, severityColor } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useAuth } from '@/components/providers/AuthProvider'
+import Link from 'next/link'
 
 type Alert = {
   id: string
@@ -72,8 +73,18 @@ export default function AlertsPage() {
           </h1>
           <p className="text-muted-foreground text-sm mt-0.5">Monitor and action database alerts across the fleet</p>
         </div>
-        {/* Summary pills */}
-        <div className="flex gap-3">
+        <div className="flex items-center gap-3">
+          {/* Notification channels link (admin only) */}
+          {role === 'super_admin' && (
+            <Link
+              href="/alerts/notifications"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm text-muted-foreground hover:text-foreground hover:border-brand-500/30 transition-colors"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              Channels
+            </Link>
+          )}
+          {/* Summary pills */}
           {[
             { label: 'Critical', value: counts.critical, cls: 'text-critical bg-critical/10 border-critical/30' },
             { label: 'Warning',  value: counts.warning,  cls: 'text-warning bg-warning/10 border-warning/30' },

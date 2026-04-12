@@ -2,6 +2,7 @@ import type { DbConnection, HealthSnapshot, HealthStatus } from '@adors/shared'
 import { supabase } from '../config/supabase.js'
 import { getAdapter } from '../adapters/index.js'
 import { getConnectionCredentials } from './connectionService.js'
+import { dispatchAlertNotifications } from './notificationService.js'
 
 // ─── Mock Adapter Interface ───────────────────────────────────────────────────
 // Phase 2 will replace these with real oracledb / mssql / mysql2 drivers
@@ -513,5 +514,11 @@ async function evaluateAlerts(conn: DbConnection, metrics: HealthMetrics) {
 
   if (alerts.length > 0) {
     await supabase.from('alerts').insert(alerts)
+
+    // Dispatch to notification channels (non-blocking — don't fail the scan)
+    dispatchAlertNotifications(
+      alerts.map((a) => ({ ...a, connection_name: conn.name })),
+      conn.id,
+    ).catch((err) => console.error('[notify] dispatch error:', err))
   }
 }
