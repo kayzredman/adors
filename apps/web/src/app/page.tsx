@@ -8,7 +8,7 @@ import { ActivityFeed } from '@/components/dashboard/ActivityFeed'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 
-type Tab = 'overview' | 'production' | 'uat' | 'alerts'
+type Tab = 'overview' | 'production' | 'uat' | 'dr' | 'alerts'
 
 type Alert = {
   id: string
@@ -50,6 +50,7 @@ export default function DashboardPage() {
 
   const prodConnections = connections.filter(c => c.environment === 'production')
   const uatConnections  = connections.filter(c => c.environment === 'uat')
+  const drConnections   = connections.filter(c => c.environment === 'dr')
   const overallScore    = connections.length
     ? Math.round(connections.reduce((sum, c) => sum + (c.health?.score ?? 0), 0) / connections.length)
     : 0
@@ -58,6 +59,7 @@ export default function DashboardPage() {
     { id: 'overview',   label: 'Overview' },
     { id: 'production', label: 'Production', badge: prodConnections.length },
     { id: 'uat',        label: 'UAT',        badge: uatConnections.length },
+    { id: 'dr',         label: 'DR',         badge: drConnections.length },
     { id: 'alerts',     label: 'Alerts',     badge: alertCounts.total || undefined, badgeDanger: alertCounts.total > 0 },
   ]
 
@@ -105,7 +107,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Tab content ─────────────────────────────────────────── */}
-      {(tab === 'overview' || tab === 'production' || tab === 'uat') && (
+      {(tab === 'overview' || tab === 'production' || tab === 'uat' || tab === 'dr') && (
         <div className="flex gap-6">
           <div className="flex-1 space-y-4">
             {(tab === 'overview' || tab === 'production') && (
@@ -122,6 +124,14 @@ export default function DashboardPage() {
                 connections={uatConnections}
                 loading={loading}
                 dotColor="bg-brand-400"
+              />
+            )}
+            {(tab === 'overview' || tab === 'dr') && (
+              <ConnectionSection
+                title="DR Databases"
+                connections={drConnections}
+                loading={loading}
+                dotColor="bg-warning"
               />
             )}
           </div>

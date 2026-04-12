@@ -69,6 +69,7 @@ router.get('/fleet', requireAuth, async (req, res) => {
 
     const prod = withScores.filter(c => c.environment === 'production')
     const uat  = withScores.filter(c => c.environment === 'uat')
+    const dr   = withScores.filter(c => c.environment === 'dr')
 
     // Worst 5 performers
     const worstPerformers = [...withScores]
@@ -110,6 +111,7 @@ router.get('/fleet', requireAuth, async (req, res) => {
           fleet:      avg(withScores),
           production: avg(prod),
           uat:        avg(uat),
+          dr:         avg(dr),
         },
         worst_performers: worstPerformers,
         fleet_trend:      fleetTrend,

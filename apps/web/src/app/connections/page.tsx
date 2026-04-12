@@ -13,7 +13,7 @@ type Connection = {
   id: string
   name: string
   db_type: 'oracle' | 'mssql' | 'mariadb'
-  environment: 'production' | 'uat'
+  environment: 'production' | 'uat' | 'dr'
   host: string
   port: number
   database_name?: string
@@ -24,7 +24,7 @@ type Connection = {
   health?: { score: number; status: string }
 }
 
-type EnvTab   = 'all' | 'production' | 'uat'
+type EnvTab   = 'all' | 'production' | 'uat' | 'dr'
 type DbFilter = 'all' | 'oracle' | 'mssql' | 'mariadb'
 
 const DB_CHIP_COLORS: Record<string, { base: string; active: string }> = {
@@ -76,6 +76,7 @@ export default function ConnectionsPage() {
 
   const prodCount = connections.filter(c => c.environment === 'production').length
   const uatCount  = connections.filter(c => c.environment === 'uat').length
+  const drCount   = connections.filter(c => c.environment === 'dr').length
 
   const visibleConns = useMemo(() => connections.filter(c => {
     if (envTab !== 'all' && c.environment !== envTab) return false
@@ -129,6 +130,7 @@ export default function ConnectionsPage() {
             { key: 'all'        as EnvTab, label: 'All',        count: connections.length },
             { key: 'production' as EnvTab, label: 'Production', count: prodCount },
             { key: 'uat'        as EnvTab, label: 'UAT',        count: uatCount  },
+            { key: 'dr'         as EnvTab, label: 'DR',         count: drCount   },
           ]).map(({ key, label, count }) => (
             <button
               key={key}
@@ -284,7 +286,9 @@ export default function ConnectionsPage() {
                         'text-xs font-semibold px-2 py-0.5 rounded-full border',
                         conn.environment === 'production'
                           ? 'text-critical bg-critical/10 border-critical/30'
-                          : 'text-brand-400 bg-brand-500/10 border-brand-500/30',
+                          : conn.environment === 'dr'
+                            ? 'text-warning bg-warning/10 border-warning/30'
+                            : 'text-brand-400 bg-brand-500/10 border-brand-500/30',
                       )}>
                         {conn.environment.toUpperCase()}
                       </span>

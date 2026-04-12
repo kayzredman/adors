@@ -11,7 +11,7 @@ export type ConnectionForPanel = {
   id:               string
   name:             string
   db_type:          'oracle' | 'mssql' | 'mariadb'
-  environment:      'production' | 'uat'
+  environment:      'production' | 'uat' | 'dr'
   host:             string
   port:             number
   database_name?:   string
@@ -23,7 +23,7 @@ export type ConnectionForPanel = {
 export type FormState = {
   name:             string
   db_type:          'oracle' | 'mssql' | 'mariadb'
-  environment:      'production' | 'uat'
+  environment:      'production' | 'uat' | 'dr'
   host:             string
   port:             number
   database_name:    string
@@ -66,7 +66,7 @@ export function ConnectionPanel({
 }: {
   mode:               'create' | 'edit'
   connection?:        ConnectionForPanel
-  defaultEnvironment?: 'production' | 'uat'
+  defaultEnvironment?: 'production' | 'uat' | 'dr'
   onClose:            () => void
   onSaved:            (id?: string) => void
 }) {
@@ -208,6 +208,7 @@ export function ConnectionPanel({
               <select className={inputCls} value={form.environment} onChange={e => set('environment', e.target.value)}>
                 <option value="production">Production</option>
                 <option value="uat">UAT</option>
+                <option value="dr">DR</option>
               </select>
             </Field>
           </div>

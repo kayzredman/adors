@@ -143,7 +143,7 @@ export default function AnalyticsPage() {
 function OverviewTab({ data, days, router }: { data: any; days: number; router: any }) {
   return (
     <>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-4 gap-4">
         <div className="rounded-xl border border-border bg-card p-6 flex flex-col items-center gap-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             <Activity className="w-3.5 h-3.5" /> Fleet Average
@@ -161,6 +161,12 @@ function OverviewTab({ data, days, router }: { data: any; days: number; router: 
             <BarChart2 className="w-3.5 h-3.5" /> UAT
           </div>
           <ScoreRing score={data.averages.uat} label="UAT Avg" sub="non-production" />
+        </div>
+        <div className="rounded-xl border border-border bg-card p-6 flex flex-col items-center gap-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-warning">
+            <AlertTriangle className="w-3.5 h-3.5" /> DR
+          </div>
+          <ScoreRing score={data.averages.dr} label="DR Avg" sub="disaster recovery" />
         </div>
       </div>
 

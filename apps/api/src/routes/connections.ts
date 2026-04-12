@@ -88,7 +88,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 const createSchema = z.object({
   name:             z.string().min(1).max(100),
   db_type:          z.enum(['oracle', 'mssql', 'mariadb']),
-  environment:      z.enum(['production', 'uat']),
+  environment:      z.enum(['production', 'uat', 'dr']),
   host:             z.string().min(1),
   port:             z.number().int().min(1).max(65535),
   database_name:    z.string().optional(),
@@ -164,7 +164,7 @@ router.get('/:id/snapshots/latest', requireAuth, async (req, res) => {
 // ─── PATCH /api/connections/:id ──────────────────────────────────────────────
 const updateSchema = z.object({
   name:             z.string().min(1).max(100).optional(),
-  environment:      z.enum(['production', 'uat']).optional(),
+  environment:      z.enum(['production', 'uat', 'dr']).optional(),
   host:             z.string().min(1).optional(),
   port:             z.number().int().min(1).max(65535).optional(),
   database_name:    z.string().optional(),

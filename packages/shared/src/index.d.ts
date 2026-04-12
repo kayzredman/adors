@@ -1,5 +1,5 @@
 export type DbType = 'oracle' | 'mssql' | 'mariadb';
-export type Environment = 'production' | 'uat';
+export type Environment = 'production' | 'uat' | 'dr';
 export type ConnectionStatus = 'active' | 'inactive' | 'error';
 export interface DbConnection {
     id: string;

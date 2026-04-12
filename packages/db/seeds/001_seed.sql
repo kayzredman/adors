@@ -11,7 +11,9 @@ insert into public.connections (id, name, db_type, environment, host, port, agen
   ('11111111-0000-0000-0000-000000000003', 'PROD_SQL_01',  'mssql',   'production', 'sql-prod-01.internal',   1433, 'MsBot',  'active'),
   ('11111111-0000-0000-0000-000000000004', 'UAT_SQL_01',   'mssql',   'uat',        'sql-uat-01.internal',    1433, 'MsBot',  'active'),
   ('11111111-0000-0000-0000-000000000005', 'PROD_MAR_01',  'mariadb', 'production', 'maria-prod-01.internal', 3306, 'MarBot', 'active'),
-  ('11111111-0000-0000-0000-000000000006', 'UAT_MAR_01',   'mariadb', 'uat',        'maria-uat-01.internal',  3306, 'MarBot', 'active');
+  ('11111111-0000-0000-0000-000000000006', 'UAT_MAR_01',   'mariadb', 'uat',        'maria-uat-01.internal',  3306, 'MarBot', 'active'),
+  ('11111111-0000-0000-0000-000000000007', 'DR_ORA_01',    'oracle',  'dr',         'ora-dr-01.internal',     1521, 'OraBot', 'active'),
+  ('11111111-0000-0000-0000-000000000008', 'DR_SQL_01',    'mssql',   'dr',         'sql-dr-01.internal',     1433, 'MsBot',  'active');
 
 -- Set prod/uat pairs
 update public.connections set prod_pair_id = '11111111-0000-0000-0000-000000000001' where id = '11111111-0000-0000-0000-000000000002';

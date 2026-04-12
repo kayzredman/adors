@@ -18,7 +18,7 @@ interface HealthMetrics {
 // ─── Mock Adapters ────────────────────────────────────────────────────────────
 
 function mockOracleHealth(conn: DbConnection): HealthMetrics {
-  const isProd = conn.environment === 'production'
+  const isProd = conn.environment === 'production' || conn.environment === 'dr'
   const score = isProd ? Math.floor(Math.random() * 30) + 65 : Math.floor(Math.random() * 20) + 78
   const blockedSessions = isProd ? Math.floor(Math.random() * 5) : 0
   const tablespacePct = Math.floor(Math.random() * 40) + 55
@@ -130,7 +130,7 @@ function mockOracleHealth(conn: DbConnection): HealthMetrics {
 }
 
 function mockMssqlHealth(conn: DbConnection): HealthMetrics {
-  const isProd = conn.environment === 'production'
+  const isProd = conn.environment === 'production' || conn.environment === 'dr'
   const score = isProd ? Math.floor(Math.random() * 25) + 70 : Math.floor(Math.random() * 20) + 80
   const memoryPct = Math.floor(Math.random() * 30) + 60
   const now = Date.now()
@@ -193,7 +193,7 @@ function mockMssqlHealth(conn: DbConnection): HealthMetrics {
 }
 
 function mockMariaDbHealth(conn: DbConnection): HealthMetrics {
-  const isProd = conn.environment === 'production'
+  const isProd = conn.environment === 'production' || conn.environment === 'dr'
   const score = isProd ? Math.floor(Math.random() * 20) + 78 : Math.floor(Math.random() * 15) + 85
   const now = Date.now()
 
