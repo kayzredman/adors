@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity, ChevronRight, Wand2, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
+import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity, ChevronRight, Wand2, Trash2, Zap, Bell, Stethoscope } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { OracleIcon, MssqlIcon, MariaDbIcon } from '@/components/brand/VendorIcons'
@@ -126,15 +127,44 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: Record<string
 
 // ─── Tool call badge ──────────────────────────────────────────────────────────
 const TOOL_ICON: Record<string, React.ElementType> = {
-  execute_query:    Search,
-  get_fleet_health: Activity,
-  get_analytics:    BarChart2,
+  execute_query:         Search,
+  get_fleet_health:      Activity,
+  get_analytics:         BarChart2,
+  diagnose_performance:  Stethoscope,
+  get_alerts:            Bell,
 }
 
 const TOOL_VERB: Record<string, string> = {
-  execute_query:    'Checking',
-  get_fleet_health: 'Fetching fleet health',
-  get_analytics:    'Analysing',
+  execute_query:         'Checking',
+  get_fleet_health:      'Fetching fleet health',
+  get_analytics:         'Analysing',
+  diagnose_performance:  'Diagnosing',
+  get_alerts:            'Fetching alerts',
+}
+
+// ─── Suggested prompts per bot ────────────────────────────────────────────────
+const SUGGESTED_PROMPTS: Record<BotId, { label: string; prompt: string; icon: React.ElementType }[]> = {
+  orabot: [
+    { label: 'Why is my DB slow?', prompt: 'Why is my database slow? Run a full diagnostic.', icon: Zap },
+    { label: 'Check blocking sessions', prompt: 'Are there any blocking sessions right now?', icon: Search },
+    { label: 'Tablespace usage', prompt: 'Show me the current tablespace usage across all connections.', icon: BarChart2 },
+    { label: 'Recent alerts', prompt: 'Show me the most recent alerts and any active problems.', icon: Bell },
+    { label: 'Health overview', prompt: 'Give me a health overview of all my Oracle connections.', icon: Activity },
+  ],
+  msbot: [
+    { label: 'Why is my DB slow?', prompt: 'Why is my database slow? Run a full diagnostic.', icon: Zap },
+    { label: 'Top wait types', prompt: 'What are the top wait types right now?', icon: Search },
+    { label: 'Blocking chains', prompt: 'Are there any active blocking chains?', icon: Search },
+    { label: 'Recent alerts', prompt: 'Show me the most recent alerts and any active problems.', icon: Bell },
+    { label: 'Memory pressure', prompt: 'Is there memory pressure? Check PLE and buffer pool.', icon: Activity },
+  ],
+  marbot: [
+    { label: 'Why is my DB slow?', prompt: 'Why is my database slow? Run a full diagnostic.', icon: Zap },
+    { label: 'Replication status', prompt: 'Check the replication status across all connections.', icon: Search },
+    { label: 'Slow queries', prompt: 'Show me the current slow query trends.', icon: BarChart2 },
+    { label: 'Recent alerts', prompt: 'Show me the most recent alerts and any active problems.', icon: Bell },
+    { label: 'Health overview', prompt: 'Give me a health overview of all my MariaDB connections.', icon: Activity },
+  ],
 }
 
 function ToolCallBadge({ tc, onRetry }: { tc: ToolCallState; onRetry?: (errorMsg: string) => void }) {
@@ -231,7 +261,7 @@ function MessageContent({ content }: { content: string }) {
   )
 }
 
-function ChatColumn({ botId }: { botId: BotId }) {
+function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: string }) {
   const config = BOT_CONFIG[botId]
   const [messages, setMessages] = useState<Message[]>(() =>
     config.intro.map((content, i) => ({ id: `intro-${i}`, role: 'bot', content }))
@@ -240,6 +270,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
   const [sending, setSending] = useState(false)
   const bottomRef    = useRef<HTMLDivElement>(null)
   const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const suggestions = SUGGESTED_PROMPTS[botId]
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -336,7 +367,7 @@ function ChatColumn({ botId }: { botId: BotId }) {
       const response = await fetch(`${API_URL}/api/agents/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ botId, messages: history }),
+        body: JSON.stringify({ botId, messages: history, ...(connectionId ? { connectionId } : {}) }),
       })
 
       if (!response.ok || !response.body) {
@@ -506,6 +537,25 @@ function ChatColumn({ botId }: { botId: BotId }) {
           </div>
         ))}
 
+        {/* Suggested prompts — shown when only intro messages remain */}
+        {!sending && messages.every(m => m.id.startsWith('intro-')) && (
+          <div className="mt-2">
+            <p className="text-xs text-muted-foreground mb-2 font-medium">Suggested prompts</p>
+            <div className="flex flex-wrap gap-2">
+              {suggestions.map((s, i) => (
+                <button
+                  key={i}
+                  onClick={() => { setInput(s.prompt); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border bg-card hover:bg-muted/60 text-xs text-foreground transition-colors"
+                >
+                  <s.icon className="w-3 h-3 opacity-60" />
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Typing indicator — only while streaming with no content yet */}
         {sending && messages[messages.length - 1]?.role === 'bot' && !messages[messages.length - 1]?.content && (
           <div className="flex gap-2">
@@ -545,8 +595,11 @@ function ChatColumn({ botId }: { botId: BotId }) {
   )
 }
 
-export default function ChatPage() {
-  const [activeBot, setActiveBot] = useState<BotId>('orabot')
+function ChatPageInner() {
+  const searchParams = useSearchParams()
+  const paramBot = searchParams.get('bot') as BotId | null
+  const paramConnId = searchParams.get('connectionId')
+  const [activeBot, setActiveBot] = useState<BotId>(paramBot && BOT_CONFIG[paramBot] ? paramBot : 'orabot')
   const config = BOT_CONFIG[activeBot]
 
   return (
@@ -598,8 +651,16 @@ export default function ChatPage() {
 
       {/* Active bot — full width */}
       <div className="flex-1 min-h-0 border border-t-0 border-border rounded-b-xl rounded-tr-xl overflow-hidden">
-        <ChatColumn key={activeBot} botId={activeBot} />
+        <ChatColumn key={activeBot} botId={activeBot} connectionId={paramConnId ?? undefined} />
       </div>
     </div>
+  )
+}
+
+export default function ChatPage() {
+  return (
+    <Suspense>
+      <ChatPageInner />
+    </Suspense>
   )
 }

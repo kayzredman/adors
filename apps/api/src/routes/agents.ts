@@ -233,6 +233,148 @@ router.post('/chat', requireAuth, async (req, res) => {
       }
     }
 
+    // ── diagnose_performance ─────────────────────────────────────────────────
+    if (name === 'diagnose_performance') {
+      const connectionName = String(args['connectionName'] ?? '')
+      if (!connectionName) {
+        return { toolCallId, result: { error: 'connectionName is required' } }
+      }
+
+      const rawConn = await supabase
+        .from('connections')
+        .select('id, name, db_type, host, port, database_name, oracle_privilege')
+        .eq('name', connectionName)
+        .single()
+        .then(r => r.data)
+
+      if (!rawConn) {
+        return { toolCallId, result: { error: `Connection "${connectionName}" not found` } }
+      }
+
+      // 1. Full latest snapshot (all metrics, not filtered)
+      const snapshot = await supabase
+        .from('health_snapshots')
+        .select('score, status, metrics, active_alerts, blocked_sessions, scored_at')
+        .eq('connection_id', rawConn.id)
+        .order('scored_at', { ascending: false })
+        .limit(1)
+        .single()
+        .then(r => r.data)
+        .catch(() => null)
+
+      // 2. Recent alerts
+      const { data: alerts } = await supabase
+        .from('alerts')
+        .select('severity, status, type, message, created_at')
+        .eq('connection_id', rawConn.id)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      // 3. Run targeted diagnostic queries
+      const DIAG_QUERIES: Record<string, string[]> = {
+        oracle: [
+          `SELECT * FROM (SELECT event, total_waits, ROUND(time_waited_micro/1e6,2) time_waited_sec FROM v$system_event WHERE wait_class != 'Idle' ORDER BY time_waited_micro DESC) WHERE ROWNUM <= 10`,
+          `SELECT sid, serial#, username, wait_class, event, seconds_in_wait, blocking_session FROM v$session WHERE status='ACTIVE' AND wait_class != 'Idle' AND ROWNUM <= 20`,
+        ],
+        mssql: [
+          `SELECT TOP 10 wait_type, waiting_tasks_count, wait_time_ms, signal_wait_time_ms FROM sys.dm_os_wait_stats WHERE wait_type NOT LIKE '%SLEEP%' AND wait_type NOT IN ('BROKER_TASK_STOP','CLR_AUTO_EVENT','CLR_MANUAL_EVENT','DISPATCHER_QUEUE_SEMAPHORE','LAZYWRITER_SLEEP','LOGMGR_QUEUE','ONDEMAND_TASK_QUEUE','REQUEST_FOR_DEADLOCK_SEARCH','SQLTRACE_BUFFER_FLUSH','XE_DISPATCHER_WAIT','XE_TIMER_EVENT','DIRTY_PAGE_POLL','CHECKPOINT_QUEUE') ORDER BY wait_time_ms DESC`,
+          `SELECT r.session_id, r.blocking_session_id, r.wait_type, r.wait_time, r.status, LEFT(t.text, 200) AS sql_text FROM sys.dm_exec_requests r CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t WHERE r.blocking_session_id != 0`,
+        ],
+        mariadb: [
+          `SELECT ID, USER, HOST, DB, COMMAND, TIME, STATE, LEFT(INFO, 200) AS SQL_TEXT FROM information_schema.PROCESSLIST WHERE COMMAND != 'Sleep' ORDER BY TIME DESC LIMIT 10`,
+          `SELECT VARIABLE_NAME, VARIABLE_VALUE FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME IN ('Innodb_row_lock_current_waits','Innodb_row_lock_time_avg','Innodb_deadlocks','Slow_queries','Threads_running','Threads_connected')`,
+        ],
+      }
+
+      let queryResults: Record<string, unknown>[] = []
+      const queries = DIAG_QUERIES[rawConn.db_type] ?? []
+
+      if (queries.length > 0) {
+        const stored = await getConnectionCredentials(rawConn.id)
+        if (stored) {
+          const creds: DbCredentials = {
+            host: rawConn.host, port: rawConn.port,
+            database: rawConn.database_name ?? '',
+            username: stored.username, password: stored.password,
+            options: rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
+          }
+          const adapter = await getAdapter(rawConn.db_type)
+          if (adapter) {
+            const results = await Promise.allSettled(
+              queries.map(sql => adapter.executeQuery(creds, sql, 10_000)),
+            )
+            queryResults = results.map((r, i) => ({
+              query: queries[i],
+              ...(r.status === 'fulfilled'
+                ? { columns: r.value.columns, rows: (r.value.rows as unknown[]).slice(0, 15), rowCount: r.value.rowCount }
+                : { error: r.reason?.message ?? 'Query failed' }),
+            }))
+          }
+        }
+      }
+
+      return {
+        toolCallId,
+        result: {
+          connectionName,
+          dbType: rawConn.db_type,
+          snapshot: snapshot ? {
+            score: snapshot.score, status: snapshot.status,
+            activeAlerts: snapshot.active_alerts, blockedSessions: snapshot.blocked_sessions,
+            scannedAt: snapshot.scored_at,
+            metrics: snapshot.metrics,
+          } : null,
+          recentAlerts: alerts ?? [],
+          diagnosticQueries: queryResults,
+        },
+      }
+    }
+
+    // ── get_alerts ───────────────────────────────────────────────────────────
+    if (name === 'get_alerts') {
+      const connectionName = args['connectionName'] ? String(args['connectionName']) : null
+      const severity       = args['severity'] ? String(args['severity']) : null
+      const limit          = Math.min(25, Math.max(1, Number(args['limit'] ?? 10)))
+
+      let query = supabase
+        .from('alerts')
+        .select('severity, status, type, message, details, created_at, resolved_at, connections!inner(name)')
+        .order('created_at', { ascending: false })
+        .limit(limit)
+
+      if (connectionName) {
+        // Filter by connection name via join
+        query = query.eq('connections.name', connectionName)
+      }
+      if (severity) {
+        query = query.eq('severity', severity)
+      }
+
+      // Scope to this bot's db_type
+      query = query.eq('connections.db_type', dbType)
+
+      const { data, error } = await query
+
+      if (error) {
+        return { toolCallId, result: { error: error.message } }
+      }
+
+      return {
+        toolCallId,
+        result: {
+          alerts: (data ?? []).map((a: Record<string, unknown>) => ({
+            connectionName: (a['connections'] as Record<string, unknown>)?.['name'],
+            severity: a['severity'],
+            status:   a['status'],
+            type:     a['type'],
+            message:  a['message'],
+            createdAt:  a['created_at'],
+            resolvedAt: a['resolved_at'],
+          })),
+        },
+      }
+    }
+
     return { toolCallId, result: { error: `Unknown tool: ${name}` } }
   }
 

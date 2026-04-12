@@ -41,10 +41,13 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - execute_query(connectionName, sql) — runs a read-only SELECT on any Oracle connection you monitor. Use this whenever the answer requires data that is not in the live snapshot (backups, AWR, sessions, tablespace history, top SQL, waits, redo, Data Guard lag, etc.). ALWAYS use this tool rather than telling the user to run the query themselves.
 - get_fleet_health — returns current health scores and alert counts for all your connections.
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
+- diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
+- get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
 - If the metric is NOT in the snapshot (e.g. backup history, top SQL, wait events), call execute_query immediately — do NOT tell the user to run the query themselves.
+- For performance troubleshooting, call diagnose_performance FIRST before drilling down with execute_query.
 - Always refer to connections by their exact name (e.g. FINTRAK_STAGING, REPORTSDB).
 - If the data shows a problem (critical score, blocked sessions, active alerts), proactively call it out.
 - Never fabricate metric values.
@@ -68,10 +71,13 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - execute_query(connectionName, sql) — runs a read-only SELECT on any SQL Server connection you monitor. Use this whenever the answer requires data not in the live snapshot (backup history, wait stats detail, blocking chains, plan cache, index fragmentation, AG sync, log space, etc.). ALWAYS use this tool rather than telling the user to run the query themselves.
 - get_fleet_health — returns current health scores and alert counts for all your connections.
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
+- diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
+- get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
 - If the metric is NOT in the snapshot, call execute_query immediately — do NOT tell the user to run the query themselves.
+- For performance troubleshooting, call diagnose_performance FIRST before drilling down with execute_query.
 - Always refer to connections by their exact name (e.g. DB STAGING BOX).
 - If the data shows a problem (critical score, blocking spids, memory pressure), proactively call it out.
 - Never fabricate metric values.
@@ -85,10 +91,13 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - execute_query(connectionName, sql) — runs a read-only SELECT/SHOW on any MariaDB connection you monitor. Use this whenever the answer requires data not in the live snapshot (replication detail, slow query log, long-running transactions, Galera state, backup history, connection list, etc.). ALWAYS use this tool rather than telling the user to run the query themselves.
 - get_fleet_health — returns current health scores and alert counts for all your connections.
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
+- diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
+- get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
 - If the metric is NOT in the snapshot, call execute_query immediately — do NOT tell the user to run the query themselves.
+- For performance troubleshooting, call diagnose_performance FIRST before drilling down with execute_query.
 - Always refer to connections by their exact name (e.g. UAT_MARIADB_DB_STAGING).
 - If the data shows a problem (critical score, replication lag, low buffer pool hit ratio), proactively call it out.
 - Never fabricate metric values.
@@ -127,6 +136,8 @@ const KEY_METRICS: Record<string, string[]> = {
     'execution_rate', 'parse_rate',
     'redo_log_switches_per_hr', 'undo_usage_pct',
     'data_guard_lag_sec',
+    'blocking_spids', 'deadlocks_total',
+    'disk_reads_per_sec', 'disk_writes_per_sec',
   ],
   mssql: [
     'db_version', 'uptime_days',
@@ -134,6 +145,7 @@ const KEY_METRICS: Record<string, string[]> = {
     'buffer_pool_memory_pct', 'page_life_expectancy_sec',
     'blocking_spids', 'deadlocks_per_min',
     'log_space_used_pct', 'ag_sync_state', 'ag_queue_hardened',
+    'disk_reads_per_sec', 'disk_writes_per_sec',
   ],
   mariadb: [
     'db_version', 'uptime_days',
@@ -141,6 +153,8 @@ const KEY_METRICS: Record<string, string[]> = {
     'buffer_pool_hit_ratio', 'buffer_pool_memory_pct',
     'replication_lag_sec', 'slave_io_running', 'slave_sql_running',
     'slow_queries_per_min', 'long_running_txn_count',
+    'blocking_sessions', 'deadlocks_total',
+    'disk_reads_per_sec', 'disk_writes_per_sec',
   ],
 }
 
@@ -271,6 +285,56 @@ const AGENT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           },
         },
         required: ['connectionName'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'diagnose_performance',
+      description:
+        'Runs a comprehensive performance diagnostic on a specific connection in ONE call. ' +
+        'Automatically gathers: full metrics snapshot, top wait events, active/blocked sessions, ' +
+        'recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" ' +
+        'or any performance troubleshooting question, before drilling down with execute_query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectionName: {
+            type: 'string',
+            description: 'Exact connection name from the fleet list',
+          },
+        },
+        required: ['connectionName'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_alerts',
+      description:
+        'Returns recent alerts for a specific connection or fleet-wide. ' +
+        'Includes severity, status, type, message, and timestamps. ' +
+        'Use when asked about problems, incidents, or alert history.',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectionName: {
+            type: 'string',
+            description: 'Connection name to filter alerts for. Omit for fleet-wide alerts.',
+          },
+          severity: {
+            type: 'string',
+            enum: ['critical', 'warning', 'info'],
+            description: 'Filter by severity level',
+          },
+          limit: {
+            type: 'number',
+            description: 'Max alerts to return (default 10, max 25)',
+          },
+        },
+        required: [],
       },
     },
   },

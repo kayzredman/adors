@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, RefreshCw, Cpu, Database, BarChart2, Timer } from 'lucide-react'
+import { ArrowLeft, RefreshCw, Cpu, Database, BarChart2, Timer, MessageCircle } from 'lucide-react'
 import { HealthGauge } from '@/components/ui/HealthGauge'
 import { OracleDetailPanel }  from '@/components/dashboard/OracleDetailPanel'
 import { MssqlDetailPanel }   from '@/components/dashboard/MssqlDetailPanel'
@@ -123,6 +123,17 @@ export default function ConnectionDetailPage() {
           >
             <BarChart2 className="w-4 h-4" />
             Analytics
+          </button>
+
+          <button
+            onClick={() => {
+              const bot = conn.db_type === 'oracle' ? 'orabot' : conn.db_type === 'mssql' ? 'msbot' : 'marbot'
+              router.push(`/chat?bot=${bot}&connectionId=${id}`)
+            }}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-brand-500/40 bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 text-sm font-medium transition-colors"
+          >
+            <MessageCircle className="w-4 h-4" />
+            Ask AI
           </button>
 
           {/* Auto-refresh selector */}
