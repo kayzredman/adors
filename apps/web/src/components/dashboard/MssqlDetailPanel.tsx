@@ -2,6 +2,26 @@
 
 import { MetricChart, Sparkline } from '@/components/ui/Charts'
 
+/** Format large numbers with SI suffixes (K, M, B, T) */
+function fmtNum(n: number): string {
+  if (n == null || isNaN(n)) return '0'
+  const abs = Math.abs(n)
+  if (abs >= 1e12) return (n / 1e12).toFixed(1) + 'T'
+  if (abs >= 1e9)  return (n / 1e9).toFixed(1)  + 'B'
+  if (abs >= 1e6)  return (n / 1e6).toFixed(1)  + 'M'
+  if (abs >= 1e3)  return (n / 1e3).toFixed(1)  + 'K'
+  return n.toLocaleString()
+}
+
+/** Format milliseconds into human-readable duration */
+function fmtMs(ms: number): string {
+  if (ms >= 86400000) return (ms / 86400000).toFixed(1) + 'd'
+  if (ms >= 3600000)  return (ms / 3600000).toFixed(1)  + 'h'
+  if (ms >= 60000)    return (ms / 60000).toFixed(1)    + 'm'
+  if (ms >= 1000)     return (ms / 1000).toFixed(1)     + 's'
+  return ms.toLocaleString() + 'ms'
+}
+
 // ── HA / Replication state card ───────────────────────────────────────────────
 
 const HA_LABELS: Record<string, string> = {
@@ -252,46 +272,59 @@ export function MssqlDetailPanel({ metrics: m, name }: MssqlDetailPanelProps) {
         {/* Top Wait Types */}
         <div className="rounded-xl border border-border bg-card p-4 col-span-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Top Wait Types (DMV)</p>
-          <div className="space-y-2">
-            {(m.top_wait_types ?? []).map((w: { wait_type: string; wait_ms: number }) => (
-              <div key={w.wait_type} className="flex items-center gap-3">
-                <span className="font-mono text-xs text-muted-foreground w-36 shrink-0">{w.wait_type}</span>
-                <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
-                  <div
-                    className="h-2 rounded-full bg-brand-500"
-                    style={{ width: `${Math.min(100, (w.wait_ms / 5000) * 100)}%` }}
-                  />
-                </div>
-                <span className="font-mono text-xs tabular-nums text-foreground w-16 text-right">{w.wait_ms.toLocaleString()} ms</span>
+          {(() => {
+            const waits = m.top_wait_types ?? []
+            const maxWait = Math.max(...waits.map((w: any) => w.wait_ms), 1)
+            return (
+              <div className="space-y-2">
+                {waits.map((w: { wait_type: string; wait_ms: number; tasks?: number }) => (
+                  <div key={w.wait_type} className="flex items-center gap-3">
+                    <span className="font-mono text-xs text-muted-foreground w-44 shrink-0 truncate" title={w.wait_type}>{w.wait_type}</span>
+                    <div className="flex-1 bg-muted rounded-full h-2.5 overflow-hidden">
+                      <div
+                        className="h-2.5 rounded-full bg-brand-500 transition-all"
+                        style={{ width: `${Math.max(2, (w.wait_ms / maxWait) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="font-mono text-xs tabular-nums text-foreground w-14 text-right" title={`${w.wait_ms.toLocaleString()} ms`}>{fmtMs(w.wait_ms)}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            )
+          })()}
         </div>
 
-        {/* Blocking + I/O */}
-        <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+        {/* Blocking & Deadlocks + Disk I/O */}
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          {/* Blocking & Deadlocks */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Blocking & Deadlocks</p>
-            <Sparkline data={m.blocking_chart ?? []} color="#EF4444" height={60} />
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-muted-foreground">Blocking SPIDs</span>
-              <span className={`font-bold tabular-nums ${m.blocking_spids > 0 ? 'text-critical' : 'text-success'}`}>{m.blocking_spids}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Deadlocks/min</span>
-              <span className={`font-bold tabular-nums ${m.deadlocks_per_min > 0 ? 'text-warning' : 'text-success'}`}>{m.deadlocks_per_min}</span>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Blocking & Deadlocks</p>
+            <Sparkline data={m.blocking_chart ?? []} color="#EF4444" height={50} />
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className={`rounded-lg p-2.5 text-center ${m.blocking_spids > 0 ? 'bg-critical/10 border border-critical/30' : 'bg-muted/50'}`}>
+                <p className={`text-2xl font-bold tabular-nums ${m.blocking_spids > 0 ? 'text-critical' : 'text-success'}`}>{m.blocking_spids}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Blocking SPIDs</p>
+              </div>
+              <div className={`rounded-lg p-2.5 text-center ${m.deadlocks_per_min > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-muted/50'}`}>
+                <p className={`text-2xl font-bold tabular-nums ${m.deadlocks_per_min > 0 ? 'text-warning' : 'text-success'}`}>{m.deadlocks_per_min}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Deadlocks/min</p>
+              </div>
             </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Disk I/O</p>
-            <Sparkline data={m.io_chart ?? []} color="#10B981" height={55} />
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-muted-foreground">Reads/s</span>
-              <span className="font-mono tabular-nums text-foreground">{m.disk_reads_per_sec}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Writes/s</span>
-              <span className="font-mono tabular-nums text-foreground">{m.disk_writes_per_sec}</span>
+
+          {/* Disk I/O */}
+          <div className="border-t border-border pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Disk I/O</p>
+            <Sparkline data={m.io_chart ?? []} color="#10B981" height={50} />
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold font-mono tabular-nums text-foreground" title={`${(m.disk_reads_per_sec ?? 0).toLocaleString()}`}>{fmtNum(m.disk_reads_per_sec ?? 0)}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Reads/s</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold font-mono tabular-nums text-foreground" title={`${(m.disk_writes_per_sec ?? 0).toLocaleString()}`}>{fmtNum(m.disk_writes_per_sec ?? 0)}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Writes/s</p>
+              </div>
             </div>
           </div>
         </div>

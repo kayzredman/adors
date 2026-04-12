@@ -2,6 +2,17 @@
 
 import { MetricChart, Sparkline, StorageCylinder } from '@/components/ui/Charts'
 
+/** Format large numbers with SI suffixes */
+function fmtNum(n: number): string {
+  if (n == null || isNaN(n)) return '0'
+  const abs = Math.abs(n)
+  if (abs >= 1e12) return (n / 1e12).toFixed(1) + 'T'
+  if (abs >= 1e9)  return (n / 1e9).toFixed(1)  + 'B'
+  if (abs >= 1e6)  return (n / 1e6).toFixed(1)  + 'M'
+  if (abs >= 1e3)  return (n / 1e3).toFixed(1)  + 'K'
+  return n.toLocaleString()
+}
+
 interface MariaDbDetailPanelProps {
   metrics: Record<string, any>
   name: string
@@ -168,32 +179,34 @@ export function MariaDbDetailPanel({ metrics: m, name }: MariaDbDetailPanelProps
         </div>
 
         {/* Blocking & I/O */}
-        <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+        <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+          {/* Blocking */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Blocking & Deadlocks</p>
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-muted-foreground">Blocked Sessions</span>
-              <span className={`font-bold tabular-nums ${(m.blocking_sessions ?? 0) > 0 ? 'text-critical' : 'text-success'}`}>
-                {m.blocking_sessions ?? 0}
-              </span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">InnoDB Deadlocks</span>
-              <span className={`font-bold tabular-nums ${(m.deadlocks_total ?? 0) > 0 ? 'text-warning' : 'text-success'}`}>
-                {m.deadlocks_total ?? 0}
-              </span>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Blocking & Deadlocks</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className={`rounded-lg p-2.5 text-center ${(m.blocking_sessions ?? 0) > 0 ? 'bg-critical/10 border border-critical/30' : 'bg-muted/50'}`}>
+                <p className={`text-2xl font-bold tabular-nums ${(m.blocking_sessions ?? 0) > 0 ? 'text-critical' : 'text-success'}`}>{m.blocking_sessions ?? 0}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Blocked</p>
+              </div>
+              <div className={`rounded-lg p-2.5 text-center ${(m.deadlocks_total ?? 0) > 0 ? 'bg-warning/10 border border-warning/30' : 'bg-muted/50'}`}>
+                <p className={`text-2xl font-bold tabular-nums ${(m.deadlocks_total ?? 0) > 0 ? 'text-warning' : 'text-success'}`}>{m.deadlocks_total ?? 0}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">InnoDB Deadlocks</p>
+              </div>
             </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Disk I/O</p>
-            <Sparkline data={m.io_chart ?? []} color="#10B981" height={55} />
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-muted-foreground">Reads</span>
-              <span className="font-mono tabular-nums text-foreground">{(m.disk_reads_per_sec ?? 0).toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Writes</span>
-              <span className="font-mono tabular-nums text-foreground">{(m.disk_writes_per_sec ?? 0).toLocaleString()}</span>
+          {/* I/O */}
+          <div className="border-t border-border pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Disk I/O</p>
+            <Sparkline data={m.io_chart ?? []} color="#10B981" height={50} />
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold font-mono tabular-nums text-foreground" title={`${(m.disk_reads_per_sec ?? 0).toLocaleString()}`}>{fmtNum(m.disk_reads_per_sec ?? 0)}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Reads</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-2.5 text-center">
+                <p className="text-xl font-bold font-mono tabular-nums text-foreground" title={`${(m.disk_writes_per_sec ?? 0).toLocaleString()}`}>{fmtNum(m.disk_writes_per_sec ?? 0)}</p>
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wider mt-0.5">Writes</p>
+              </div>
             </div>
           </div>
         </div>
