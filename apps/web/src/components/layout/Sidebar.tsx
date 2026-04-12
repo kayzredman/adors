@@ -21,6 +21,7 @@ import {
   Settings,
   HeartPulse,
   Shield,
+  FileBarChart,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -36,6 +37,7 @@ const NAV_ITEMS = [
   { href: '/scripts',     label: 'Script Library', icon: BookOpen,       minRole: 'analyst' },
   { href: '/sandbox',     label: 'UAT Sandbox',   icon: FlaskConical,    minRole: 'dba'     },
   { href: '/dr',          label: 'DR Management', icon: Shield,          minRole: 'dba'     },
+  { href: '/reports',     label: 'Reports',       icon: FileBarChart,    minRole: 'analyst' },
   { href: '/connections', label: 'Connections',   icon: Database,        minRole: 'analyst' },
 ]
 

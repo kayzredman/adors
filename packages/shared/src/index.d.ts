@@ -127,6 +127,69 @@ export interface DrDrill {
     created_at: string;
     run_by_name?: string;
 }
+export type ReportType = 'capacity' | 'fleet' | 'dr-readiness' | 'incidents' | 'audit';
+export interface CapacityTrendPoint {
+    t: string;
+    storage_pct: number | null;
+    connections_pct: number | null;
+    memory_pct: number | null;
+    score: number | null;
+}
+export interface CapacityReport {
+    connection_id: string;
+    connection_name: string;
+    db_type: DbType;
+    environment: Environment;
+    trend: CapacityTrendPoint[];
+    current: {
+        storage_pct: number | null;
+        connections_pct: number | null;
+        memory_pct: number | null;
+        throughput: number | null;
+    };
+}
+export interface FleetHealthSummary {
+    total_connections: number;
+    by_status: Record<HealthStatus, number>;
+    by_db_type: Record<string, { count: number; avg_score: number | null }>;
+    by_environment: Record<string, { count: number; avg_score: number | null }>;
+    worst_performers: { id: string; name: string; db_type: DbType; score: number; status: HealthStatus }[];
+    fleet_avg_score: number | null;
+    score_distribution: { range: string; count: number }[];
+}
+export interface DrReadinessReport {
+    pair_id: string;
+    prod_name: string;
+    dr_name: string;
+    db_type: DbType;
+    rpo_target: number;
+    rto_target: number;
+    last_drill_date: string | null;
+    last_drill_result: DrillResult | null;
+    last_rpo_actual: number | null;
+    last_rto_actual: number | null;
+    drill_count: number;
+    pass_rate: number | null;
+    readiness: 'ready' | 'overdue' | 'at-risk' | 'never-tested';
+}
+export interface IncidentSummary {
+    total_alerts: number;
+    by_severity: Record<AlertSeverity, number>;
+    by_status: Record<string, number>;
+    by_connection: { connection_id: string; name: string; count: number }[];
+    by_type: { type: string; count: number }[];
+    timeline: { t: string; critical: number; warning: number; info: number }[];
+    mttr_hours: number | null;
+}
+export interface AuditEntry {
+    id: string;
+    actor_name: string;
+    action: string;
+    target_type: string;
+    target_id?: string;
+    payload?: Record<string, unknown>;
+    created_at: string;
+}
 export interface ApiResponse<T = unknown> {
     data?: T;
     error?: string;

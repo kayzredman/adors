@@ -229,4 +229,19 @@ export const api = {
     deleteDrill: (id: string) =>
       apiFetch<{ message: string }>(`/api/dr/drills/${id}`, { method: 'DELETE' }),
   },
+  reports: {
+    capacity: (days = 30) =>
+      apiFetch<{ data: any }>(`/api/reports/capacity?days=${days}`),
+    fleet: () =>
+      apiFetch<{ data: any }>('/api/reports/fleet'),
+    drReadiness: () =>
+      apiFetch<{ data: any[] }>('/api/reports/dr-readiness'),
+    incidents: (days = 30) =>
+      apiFetch<{ data: any }>(`/api/reports/incidents?days=${days}`),
+    audit: (days = 30, limit = 200, action?: string) => {
+      const params = new URLSearchParams({ days: String(days), limit: String(limit) })
+      if (action) params.set('action', action)
+      return apiFetch<{ data: any }>(`/api/reports/audit?${params}`)
+    },
+  },
 }
