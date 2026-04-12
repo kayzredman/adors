@@ -125,7 +125,7 @@ export class OracleAdapter implements DbAdapter {
 
     try {
       const [
-        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts, haState,
+        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts, haState, osStats, pga,
       ] = await Promise.all([
         this.#queryDbProps(conn),
         this.#querySessions(conn),
@@ -138,6 +138,8 @@ export class OracleAdapter implements DbAdapter {
         this.#queryBackups(conn).catch(() => []),
         this.#queryDiskMounts(conn).catch(() => []),
         this.#queryHaState(conn).catch(() => ({ type: 'none', details: [] })),
+        this.#queryOsStats(conn).catch(() => ({ physical_memory_gb: 0, free_memory_gb: 0, cpu_count: 0, cpu_idle_pct: 0, cpu_user_pct: 0, cpu_sys_pct: 0, cpu_busy_pct: 0 })),
+        this.#queryPga(conn).catch(() => ({ target_gb: 0, allocated_gb: 0, freeable_gb: 0, max_gb: 0, cache_hit_pct: 0 })),
       ])
 
       return {
@@ -145,8 +147,8 @@ export class OracleAdapter implements DbAdapter {
         // Server Info
         db_version:  dbProps.version,
         uptime_days: dbProps.uptime_days,
-        os:          'Linux x86_64',
-        cpus:        0,
+        os:          osStats.cpu_count > 0 ? `${osStats.cpu_count} CPUs` : 'Linux x86_64',
+        cpus:        osStats.cpu_count,
         // Clients
         num_clients:     sessions.active,
         avg_response_ms: sysstat.avg_response_ms,
@@ -214,6 +216,23 @@ export class OracleAdapter implements DbAdapter {
         disk_mounts:    diskMounts,
         // HA / Data Guard state
         ha_state:       haState,
+        // OS-level metrics (from V$OSSTAT)
+        os_physical_memory_gb: osStats.physical_memory_gb,
+        os_free_memory_gb:     osStats.free_memory_gb,
+        os_memory_usage_pct:   osStats.physical_memory_gb > 0
+          ? Math.round((1 - osStats.free_memory_gb / osStats.physical_memory_gb) * 100)
+          : 0,
+        os_cpu_count:    osStats.cpu_count,
+        os_cpu_idle_pct: osStats.cpu_idle_pct,
+        os_cpu_user_pct: osStats.cpu_user_pct,
+        os_cpu_sys_pct:  osStats.cpu_sys_pct,
+        os_cpu_busy_pct: osStats.cpu_busy_pct,
+        // PGA metrics (from V$PGASTAT)
+        pga_target_gb:    pga.target_gb,
+        pga_allocated_gb: pga.allocated_gb,
+        pga_freeable_gb:  pga.freeable_gb,
+        pga_max_gb:       pga.max_gb,
+        pga_cache_hit_pct: pga.cache_hit_pct,
       }
     } finally {
       await conn.close()
@@ -575,5 +594,62 @@ export class OracleAdapter implements DbAdapter {
       free_gb:  Number(r.FREE_GB  ?? 0),
       used_pct: Number(r.USED_PCT ?? 0),
     }))
+  }
+
+  async #queryOsStats(conn: any) {
+    // V$OSSTAT provides OS-level counters — available Oracle 10g+
+    const { rows } = await conn.execute(
+      `SELECT stat_name, value FROM v$osstat
+       WHERE stat_name IN (
+         'PHYSICAL_MEMORY_BYTES','FREE_MEMORY_BYTES',
+         'NUM_CPUS','NUM_CPU_CORES',
+         'IDLE_TIME','BUSY_TIME','USER_TIME','SYS_TIME'
+       )`,
+      [], { outFormat: 4002 },
+    )
+    const get = (name: string) => Number((rows as any[]).find((r: any) => r.STAT_NAME === name)?.VALUE ?? 0)
+    const physBytes = get('PHYSICAL_MEMORY_BYTES')
+    const freeBytes = get('FREE_MEMORY_BYTES')
+    const idleTime  = get('IDLE_TIME')   // centiseconds
+    const busyTime  = get('BUSY_TIME')
+    const userTime  = get('USER_TIME')
+    const sysTime   = get('SYS_TIME')
+    const totalTime = idleTime + busyTime || 1 // avoid div-by-zero
+
+    return {
+      physical_memory_gb: Math.round(physBytes / 1073741824 * 10) / 10,
+      free_memory_gb:     Math.round(freeBytes / 1073741824 * 10) / 10,
+      cpu_count:          get('NUM_CPUS') || get('NUM_CPU_CORES'),
+      cpu_idle_pct:       Math.round(idleTime / totalTime * 100),
+      cpu_user_pct:       Math.round(userTime / totalTime * 100),
+      cpu_sys_pct:        Math.round(sysTime  / totalTime * 100),
+      cpu_busy_pct:       Math.round(busyTime / totalTime * 100),
+    }
+  }
+
+  async #queryPga(conn: any) {
+    // V$PGASTAT — PGA memory advisory and utilization
+    const { rows } = await conn.execute(
+      `SELECT name, value FROM v$pgastat
+       WHERE name IN (
+         'aggregate PGA target parameter',
+         'aggregate PGA auto target',
+         'total PGA allocated',
+         'total freeable PGA memory',
+         'maximum PGA allocated',
+         'cache hit percentage'
+       )`,
+      [], { outFormat: 4002 },
+    )
+    const get = (name: string) => Number((rows as any[]).find((r: any) => r.NAME === name)?.VALUE ?? 0)
+    const toGb = (v: number) => Math.round(v / 1073741824 * 10) / 10
+
+    return {
+      target_gb:     toGb(get('aggregate PGA target parameter')),
+      allocated_gb:  toGb(get('total PGA allocated')),
+      freeable_gb:   toGb(get('total freeable PGA memory')),
+      max_gb:        toGb(get('maximum PGA allocated')),
+      cache_hit_pct: Math.round(get('cache hit percentage') * 10) / 10,
+    }
   }
 }

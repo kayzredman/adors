@@ -40,7 +40,7 @@ export class MssqlAdapter implements DbAdapter {
     })
 
     try {
-      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState, filegroupBreakdown] = await Promise.all([
+      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState, filegroupBreakdown, osMemory] = await Promise.all([
         this.#queryVersion(pool),
         this.#queryMemory(pool),
         this.#querySessions(pool),
@@ -51,6 +51,7 @@ export class MssqlAdapter implements DbAdapter {
         this.#queryDiskMounts(pool).catch(() => []),
         this.#queryHaState(pool).catch(() => ({ type: 'none', details: [] })),
         this.#queryFilegroupBreakdown(pool).catch(() => []),
+        this.#queryOsMemory(pool).catch(() => ({ total_gb: 0, available_gb: 0, usage_pct: 0, system_memory_state: 'unknown', kernel_paged_gb: 0, kernel_nonpaged_gb: 0 })),
       ])
 
       // Return flat keys matching mock adapter shape (MssqlDetailPanel reads these directly)
@@ -99,6 +100,14 @@ export class MssqlAdapter implements DbAdapter {
         filegroup_breakdown:       filegroupBreakdown,
         // HA / Replication state
         ha_state:                  haState,
+        // OS-level metrics (from sys.dm_os_sys_memory + sys.dm_os_sys_info)
+        os_physical_memory_gb:     osMemory.total_gb,
+        os_available_memory_gb:    osMemory.available_gb,
+        os_memory_usage_pct:       osMemory.usage_pct,
+        os_system_memory_state:    osMemory.system_memory_state,
+        os_cpu_count:              version.cpus,
+        os_kernel_paged_gb:        osMemory.kernel_paged_gb,
+        os_kernel_nonpaged_gb:     osMemory.kernel_nonpaged_gb,
 
         // Legacy nested shape kept for backwards compatibility
         connections: {
@@ -557,6 +566,30 @@ export class MssqlAdapter implements DbAdapter {
         writes_per_s:   Number(ior.writes ?? 0),
         io_chart:       [{ t: new Date().toISOString(), v: Number(ior.reads ?? 0) + Number(ior.writes ?? 0) }],
       },
+    }
+  }
+
+  async #queryOsMemory(pool: any) {
+    // sys.dm_os_sys_memory — OS-level physical memory (SQL 2008+)
+    const r = await pool.request().query(`
+      SELECT
+        total_physical_memory_kb,
+        available_physical_memory_kb,
+        system_memory_state_desc,
+        kernel_paged_pool_kb,
+        kernel_nonpaged_pool_kb
+      FROM sys.dm_os_sys_memory
+    `)
+    const row = r.recordset[0] ?? {}
+    const totalGb     = Math.round(Number(row.total_physical_memory_kb ?? 0) / 1048576 * 10) / 10
+    const availGb     = Math.round(Number(row.available_physical_memory_kb ?? 0) / 1048576 * 10) / 10
+    return {
+      total_gb:             totalGb,
+      available_gb:         availGb,
+      usage_pct:            totalGb > 0 ? Math.round((1 - availGb / totalGb) * 100) : 0,
+      system_memory_state:  String(row.system_memory_state_desc ?? 'unknown'),
+      kernel_paged_gb:      Math.round(Number(row.kernel_paged_pool_kb ?? 0) / 1048576 * 100) / 100,
+      kernel_nonpaged_gb:   Math.round(Number(row.kernel_nonpaged_pool_kb ?? 0) / 1048576 * 100) / 100,
     }
   }
 }

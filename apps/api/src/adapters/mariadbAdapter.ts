@@ -35,11 +35,12 @@ export class MariaDbAdapter implements DbAdapter {
     })
 
     try {
-      const [globalStatus, innodbStatus, replStatus, diskMounts] = await Promise.all([
+      const [globalStatus, innodbStatus, replStatus, diskMounts, osLike] = await Promise.all([
         this.#queryGlobalStatus(conn),
         this.#queryInnodbStatus(conn),
         this.#queryReplication(conn),
         this.#queryDiskMounts(conn).catch(() => []),
+        this.#queryOsLike(conn).catch(() => ({ physical_memory_gb: 0, max_connections: 0, open_files_limit: 0, open_files: 0, open_tables: 0, tmp_disk_tables: 0, tmp_memory_tables: 0, cpu_threads: 0, handler_read_rnd_next: 0, handler_read_key: 0, created_tmp_files: 0 })),
       ])
 
       const get = (map: Record<string, string>, key: string) => Number(map[key] ?? 0)
@@ -71,7 +72,7 @@ export class MariaDbAdapter implements DbAdapter {
         db_version:  globalStatus['version'] ?? globalStatus['Version'] ?? 'unknown',
         uptime_days: Math.floor(get(globalStatus, 'Uptime') / 86400),
         os:          'Linux x86_64',
-        cpus:        0,
+        cpus:        osLike.cpu_threads,
         // Connections
         active_connections:  threadsConnected,
         max_connections:     maxConn,
@@ -124,6 +125,21 @@ export class MariaDbAdapter implements DbAdapter {
         backup_history: [],
         // Disk / schema utilization
         disk_mounts: diskMounts,
+        // OS-level metrics (best approximation from SHOW GLOBAL STATUS / VARIABLES)
+        os_physical_memory_gb:   osLike.physical_memory_gb,
+        os_memory_usage_pct:     osLike.physical_memory_gb > 0
+          ? Math.round(bpSizeMb / 1024 / osLike.physical_memory_gb * 100)
+          : 0,
+        os_cpu_threads:          osLike.cpu_threads,
+        os_max_connections:      osLike.max_connections,
+        os_open_files_limit:     osLike.open_files_limit,
+        os_open_files:           osLike.open_files,
+        os_open_tables:          osLike.open_tables,
+        os_tmp_disk_tables:      osLike.tmp_disk_tables,
+        os_tmp_memory_tables:    osLike.tmp_memory_tables,
+        os_handler_read_rnd_next: osLike.handler_read_rnd_next,
+        os_handler_read_key:     osLike.handler_read_key,
+        os_created_tmp_files:    osLike.created_tmp_files,
       }
     } finally {
       await conn.end()
@@ -250,5 +266,45 @@ export class MariaDbAdapter implements DbAdapter {
       free_gb:     0,
       used_pct:    100,
     }))
+  }
+
+  async #queryOsLike(conn: any) {
+    // Gather OS-level proxies from GLOBAL STATUS + GLOBAL VARIABLES
+    const [statusRows] = await conn.query(`
+      SELECT variable_name, variable_value FROM information_schema.global_status
+      WHERE variable_name IN (
+        'Open_files','Open_tables','Threads_connected','Threads_running',
+        'Created_tmp_disk_tables','Created_tmp_tables','Created_tmp_files',
+        'Handler_read_rnd_next','Handler_read_key'
+      )
+    `)
+    const status: Record<string, number> = {}
+    for (const r of (statusRows as any[])) status[r.variable_name] = Number(r.variable_value ?? 0)
+
+    const [varRows] = await conn.query(`
+      SELECT variable_name, variable_value FROM information_schema.global_variables
+      WHERE variable_name IN (
+        'max_connections','open_files_limit','thread_pool_size'
+      )
+    `)
+    const vars: Record<string, number> = {}
+    for (const r of (varRows as any[])) vars[r.variable_name] = Number(r.variable_value ?? 0)
+
+    // Physical memory: not directly available via SQL, but innodb_buffer_pool_size
+    // is typically 70-80% of RAM. We report 0 if unavailable — better than guessing.
+    // On Linux, we can try @@global.version_compile_machine for arch info.
+    return {
+      physical_memory_gb:     0,   // Not queryable from MariaDB SQL — set from innodb pool if needed
+      max_connections:        vars['max_connections'] ?? 151,
+      open_files_limit:       vars['open_files_limit'] ?? 0,
+      open_files:             status['Open_files'] ?? 0,
+      open_tables:            status['Open_tables'] ?? 0,
+      tmp_disk_tables:        status['Created_tmp_disk_tables'] ?? 0,
+      tmp_memory_tables:      status['Created_tmp_tables'] ?? 0,
+      cpu_threads:            vars['thread_pool_size'] ?? status['Threads_running'] ?? 0,
+      handler_read_rnd_next:  status['Handler_read_rnd_next'] ?? 0,
+      handler_read_key:       status['Handler_read_key'] ?? 0,
+      created_tmp_files:      status['Created_tmp_files'] ?? 0,
+    }
   }
 }

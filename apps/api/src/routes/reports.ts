@@ -64,6 +64,8 @@ router.get('/capacity', requireAuth, async (req, res) => {
           connections_pct: extractConnectionsPct(lm),
           memory_pct: extractMemoryPct(lm, c.db_type),
           throughput: extractThroughput(lm, c.db_type),
+          cpu_pct: extractCpuPct(lm, c.db_type),
+          os_memory: extractOsMemory(lm),
         },
       }
     })
@@ -353,7 +355,7 @@ router.get('/audit', requireAuth, requireDBA, async (req, res) => {
 function extractStoragePct(m: Record<string, unknown>, dbType: string): number | null {
   if (dbType === 'oracle') return num(m.storage_data_pct)
   if (dbType === 'mariadb') return num(m.disk_usage_pct)
-  // MSSQL: derive from buffer pool or disk
+  // MSSQL: derive from disk mounts if available, then buffer pool fallback
   return num(m.disk_usage_pct) ?? num(m.buffer_pool_memory_pct)
 }
 
@@ -365,6 +367,10 @@ function extractConnectionsPct(m: Record<string, unknown>): number | null {
 }
 
 function extractMemoryPct(m: Record<string, unknown>, dbType: string): number | null {
+  // Prefer OS-level memory usage when available
+  const osMem = num(m.os_memory_usage_pct)
+  if (osMem != null && osMem > 0) return osMem
+  // Fall back to database-level memory metrics
   if (dbType === 'mssql') return num(m.buffer_pool_memory_pct)
   if (dbType === 'mariadb') return num(m.innodb_buffer_hit_ratio_pct)
   if (dbType === 'oracle') {
@@ -379,6 +385,19 @@ function extractThroughput(m: Record<string, unknown>, dbType: string): number |
   if (dbType === 'mariadb') return num(m.queries_per_sec)
   if (dbType === 'mssql') return num(m.batch_requests_sec)
   return null
+}
+
+function extractCpuPct(m: Record<string, unknown>, dbType: string): number | null {
+  if (dbType === 'oracle') return num(m.os_cpu_busy_pct)
+  if (dbType === 'mssql') return num(m.cpu_usage_pct)
+  return null
+}
+
+function extractOsMemory(m: Record<string, unknown>): { total_gb: number | null; available_gb: number | null } {
+  return {
+    total_gb:     num(m.os_physical_memory_gb),
+    available_gb: num(m.os_available_memory_gb) ?? num(m.os_free_memory_gb),
+  }
 }
 
 function num(v: unknown): number | null {
