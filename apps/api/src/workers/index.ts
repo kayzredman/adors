@@ -1,4 +1,5 @@
 import { startHealthScanScheduler, createHealthScanWorker } from './healthScanWorker.js'
+import { createSandboxWorker, closeSandboxWorker } from './sandboxWorker.js'
 
 async function main() {
   console.log('[worker] ADORS Worker starting...')
@@ -6,20 +7,21 @@ async function main() {
   // Start the recurring scheduler
   await startHealthScanScheduler()
 
-  // Create the worker process
-  const worker = createHealthScanWorker()
+  // Create worker processes
+  const healthWorker  = createHealthScanWorker()
+  const sandboxWorker = createSandboxWorker()
 
   // Graceful shutdown
   const shutdown = async () => {
     console.log('[worker] Shutting down gracefully...')
-    await worker.close()
+    await Promise.allSettled([healthWorker.close(), closeSandboxWorker()])
     process.exit(0)
   }
 
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
 
-  console.log('[worker] Ready — processing health scan jobs')
+  console.log('[worker] Ready — processing health scan + sandbox jobs')
 }
 
 main().catch((err) => {

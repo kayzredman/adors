@@ -68,22 +68,22 @@ export async function startHealthScanScheduler(): Promise<void> {
   )
 
   // Two-tier priority scanning:
-  // • critical/warning connections — every 1 minute (catch active incidents fast)
-  // • healthy connections          — every 3 minutes (steady state, lower DB load)
+  // • critical/warning connections — every 2 minutes (catch active incidents)
+  // • healthy connections          — every 5 minutes (steady state, lower DB load)
   // Both jobs are handled in the BullMQ worker by scanAllConnections(), which
   // filters by status before scanning so each tier only touches the right rows.
   await healthScanQueue.add(
     'priority-scan',
     { statuses: ['critical', 'warning'] },
-    { repeat: { pattern: '* * * * *' } },
+    { repeat: { pattern: '*/2 * * * *' } },
   )
   await healthScanQueue.add(
     'routine-scan',
     { statuses: ['healthy'] },
-    { repeat: { pattern: '*/3 * * * *' } },
+    { repeat: { pattern: '*/5 * * * *' } },
   )
 
-  console.log('[worker] Health scan scheduler started — priority: 1min | routine: 3min')
+  console.log('[worker] Health scan scheduler started — priority: 2min | routine: 5min')
 }
 
 export async function releaseSchedulerLock(): Promise<void> {

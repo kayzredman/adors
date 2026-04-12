@@ -9,7 +9,8 @@
 
 import { existsSync, readdirSync } from 'fs'
 import { join } from 'path'
-import type { DbAdapter, DbCredentials } from './types.js'
+import type { DbAdapter, DbCredentials, RemediationResult, REMEDIATION_ALLOW_LIST as _AllowType } from './types.js'
+import { REMEDIATION_ALLOW_LIST } from './types.js'
 
 /** Reject anything that isn't a read-only statement. */
 function validateReadOnlySql(sql: string): void {
@@ -124,8 +125,9 @@ export class OracleAdapter implements DbAdapter {
     const conn = await getOracleConnection(creds)
 
     try {
+      // Group 1: core v$ metrics (lightweight, must succeed)
       const [
-        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat, backups, diskMounts, haState, osStats, pga,
+        dbProps, sessions, processes, waits, sga, tablespaces, redoLog, sysstat,
       ] = await Promise.all([
         this.#queryDbProps(conn),
         this.#querySessions(conn),
@@ -135,6 +137,10 @@ export class OracleAdapter implements DbAdapter {
         this.#queryTablespaces(conn),
         this.#queryRedoLog(conn),
         this.#querySysstat(conn),
+      ])
+
+      // Group 2: optional/heavier queries (can fail gracefully)
+      const [backups, diskMounts, haState, osStats, pga] = await Promise.all([
         this.#queryBackups(conn).catch(() => []),
         this.#queryDiskMounts(conn).catch(() => []),
         this.#queryHaState(conn).catch(() => ({ type: 'none', details: [] })),
@@ -660,6 +666,27 @@ export class OracleAdapter implements DbAdapter {
       freeable_gb:   toGb(get('total freeable PGA memory')),
       max_gb:        toGb(get('maximum PGA allocated')),
       cache_hit_pct: Math.round(get('cache hit percentage') * 10) / 10,
+    }
+  }
+
+  async executeRemediation(creds: DbCredentials, command: string, timeoutMs = 15_000): Promise<RemediationResult> {
+    const normalized = command.trim().replace(/\s+/g, ' ').toUpperCase()
+    const patterns = REMEDIATION_ALLOW_LIST['oracle'] ?? []
+    if (!patterns.some(p => p.test(normalized))) {
+      throw new Error(`Command not in allow-list: ${normalized.slice(0, 80)}`)
+    }
+    const conn = await getOracleConnection(creds)
+    const start = Date.now()
+    try {
+      const timeoutHandle = setTimeout(() => { conn.close().catch(() => {}) }, timeoutMs)
+      await conn.execute(command)
+      clearTimeout(timeoutHandle)
+      return { success: true, message: 'Command executed successfully', executionMs: Date.now() - start }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, message: msg, executionMs: Date.now() - start }
+    } finally {
+      await conn.close().catch(() => {})
     }
   }
 }

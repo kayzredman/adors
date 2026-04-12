@@ -16,6 +16,12 @@ export interface DbAdapter {
    * this before sending to the database.
    */
   executeQuery(creds: DbCredentials, sql: string, timeoutMs?: number): Promise<QueryResult>
+  /**
+   * Execute a pre-approved write/remediation command (KILL SESSION, ALTER SYSTEM, etc.).
+   * Only allowed command patterns are accepted — the adapter validates against an allow-list.
+   * Returns the result or throws an error.
+   */
+  executeRemediation(creds: DbCredentials, command: string, timeoutMs?: number): Promise<RemediationResult>
 }
 
 export interface DbCredentials {
@@ -33,4 +39,43 @@ export interface QueryResult {
   rows:        Record<string, unknown>[]
   rowCount:    number
   executionMs: number
+}
+
+export interface RemediationResult {
+  success:     boolean
+  message:     string
+  executionMs: number
+}
+
+/**
+ * Allow-listed remediation command patterns per DB type.
+ * Each pattern is a regex tested against the normalized (uppercased, trimmed) command.
+ */
+export const REMEDIATION_ALLOW_LIST: Record<string, RegExp[]> = {
+  oracle: [
+    /^ALTER\s+SYSTEM\s+KILL\s+SESSION\b/,
+    /^ALTER\s+SYSTEM\s+DISCONNECT\s+SESSION\b/,
+    /^ALTER\s+TABLESPACE\s+\S+\s+ADD\s+DATAFILE\b/,
+    /^ALTER\s+SYSTEM\s+SET\b/,
+    /^ALTER\s+SYSTEM\s+FLUSH\s+SHARED_POOL\b/,
+    /^ALTER\s+SYSTEM\s+FLUSH\s+BUFFER_CACHE\b/,
+    /^ALTER\s+SYSTEM\s+SWITCH\s+LOGFILE\b/,
+  ],
+  mssql: [
+    /^KILL\s+\d+/,
+    /^DBCC\s+FREEPROCCACHE\b/,
+    /^DBCC\s+DROPCLEANBUFFERS\b/,
+    /^DBCC\s+SHRINKFILE\b/,
+    /^ALTER\s+DATABASE\b/,
+    /^ALTER\s+INDEX\b.*\bREBUILD\b/,
+    /^ALTER\s+INDEX\b.*\bREORGANIZE\b/,
+  ],
+  mariadb: [
+    /^KILL\s+\d+/,
+    /^KILL\s+QUERY\s+\d+/,
+    /^FLUSH\s+TABLES\b/,
+    /^FLUSH\s+QUERY\s+CACHE\b/,
+    /^OPTIMIZE\s+TABLE\b/,
+    /^SET\s+GLOBAL\b/,
+  ],
 }

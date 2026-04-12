@@ -25,6 +25,7 @@ import servicesRouter from './routes/services.js'
 import drRouter from './routes/dr.js'
 import reportsRouter from './routes/reports.js'
 import { startHealthScanScheduler, createHealthScanWorker, closeWorker, releaseSchedulerLock } from './workers/healthScanWorker.js'
+import { createSandboxWorker, closeSandboxWorker } from './workers/sandboxWorker.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 4000
@@ -88,6 +89,7 @@ async function bootstrap() {
     try {
       await startHealthScanScheduler()
       createHealthScanWorker()
+      createSandboxWorker()
       workerCreated = true
     } catch (err: any) {
       console.warn('[workers] BullMQ init failed (Redis unavailable?) — health scan scheduler disabled:', err.message)
@@ -103,7 +105,7 @@ async function bootstrap() {
   const shutdown = async (signal: string) => {
     console.log(`[adors-api] ${signal} received — shutting down gracefully`)
     if (workerCreated) {
-      await Promise.allSettled([releaseSchedulerLock(), closeWorker()])
+      await Promise.allSettled([releaseSchedulerLock(), closeWorker(), closeSandboxWorker()])
     }
     process.exit(0)
   }

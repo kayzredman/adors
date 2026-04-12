@@ -22,6 +22,7 @@ import {
   HeartPulse,
   Shield,
   FileBarChart,
+  ClipboardList,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -39,6 +40,7 @@ const NAV_ITEMS = [
   { href: '/dr',          label: 'DR Management', icon: Shield,          minRole: 'dba'     },
   { href: '/reports',     label: 'Reports',       icon: FileBarChart,    minRole: 'analyst' },
   { href: '/connections', label: 'Connections',   icon: Database,        minRole: 'analyst' },
+  { href: '/activity',    label: 'Audit Log',     icon: ClipboardList,   minRole: 'analyst' },
 ]
 
 const ROLE_LEVEL: Record<string, number> = {

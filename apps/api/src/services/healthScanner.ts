@@ -417,7 +417,7 @@ export async function triggerManualScan(conn: DbConnection): Promise<HealthSnaps
 
 // Maximum concurrent DB scans per batch. Keeps the Supabase connection pool
 // free for live user traffic even when the fleet is large.
-const SCAN_BATCH_SIZE = 3
+const SCAN_BATCH_SIZE = 2
 
 /**
  * Scan all active connections, optionally filtered to specific health statuses.

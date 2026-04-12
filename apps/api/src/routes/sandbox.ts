@@ -2,10 +2,8 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { supabase } from '../config/supabase.js'
 import { requireAuth, requireDBA, requireAAL2 } from '../middleware/auth.js'
-import { logActivity } from '../services/activityService.js'
-import { getAdapter } from '../adapters/index.js'
-import { getConnectionCredentials } from '../services/connectionService.js'
-import type { DbCredentials } from '../adapters/types.js'
+import { sandboxQueue } from '../workers/sandboxWorker.js'
+import type { SandboxJobData } from '../workers/sandboxWorker.js'
 
 const router = Router()
 
@@ -126,14 +124,27 @@ router.post('/run', requireAuth, requireDBA, requireAAL2, async (req, res) => {
 
     if (runErr || !run) throw runErr ?? new Error('Failed to create run')
 
-    // 4. Return immediately — execution is async (Phase 3: queue a BullMQ job)
-    res.status(202).json({
-      data: { ...run, script_name: script.name, connection_name: conn.name },
-      message: 'Sandbox run queued — polling /api/sandbox/runs/:id for status',
+    // 4. Queue BullMQ job for isolated execution
+    const jobData: SandboxJobData = {
+      runId:        run.id,
+      scriptId:     script.id,
+      scriptName:   script.name,
+      sqlContent:   script.sql_content,
+      riskLevel:    script.risk_level,
+      connectionId: conn.id,
+      connName:     conn.name,
+      dbType:       conn.db_type,
+      userId:       user.id,
+    }
+
+    await sandboxQueue.add('execute', jobData, {
+      jobId: run.id,             // deduplicate by run ID
     })
 
-    // 5. Async execution (simple setTimeout for now; Phase 3 replaces with BullMQ)
-    executeScriptAsync(run.id, script, conn, user.id).catch(console.error)
+    res.status(202).json({
+      data: { ...run, script_name: script.name, connection_name: conn.name },
+      message: 'Sandbox run queued — poll /api/sandbox/runs/:id for status',
+    })
 
   } catch (err: any) {
     res.status(500).json({ error: err.message })
@@ -155,84 +166,5 @@ router.get('/runs/:id', requireAuth, async (req, res) => {
     res.status(500).json({ error: err.message })
   }
 })
-
-// ─── Async execution helper ──────────────────────────────────────────────────
-async function executeScriptAsync(
-  runId: string,
-  script: { id: string; name: string; sql_content: string; risk_level: string },
-  conn: { id: string; name: string; db_type: string },
-  userId: string,
-) {
-  const start = Date.now()
-  await supabase.from('sandbox_runs').update({ status: 'running' }).eq('id', runId)
-
-  try {
-    // Resolve stored credentials for this connection
-    const stored = await getConnectionCredentials(conn.id)
-    if (!stored) throw new Error(`No credentials stored for "${conn.name}"`)
-
-    // Fetch full connection for host/port/database
-    const { data: rawConn } = await supabase
-      .from('connections')
-      .select('host, port, database_name, oracle_privilege')
-      .eq('id', conn.id)
-      .single()
-
-    if (!rawConn) throw new Error('Connection record not found')
-
-    const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
-    const creds: DbCredentials = {
-      host:     rawConn.host,
-      port:     rawConn.port ?? defaultPorts[conn.db_type] ?? 3306,
-      database: rawConn.database_name ?? '',
-      username: stored.username,
-      password: stored.password,
-      options:  rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
-    }
-
-    const adapter = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
-    const result  = await adapter.executeQuery(creds, script.sql_content, 30_000)
-
-    const duration   = Date.now() - start
-    const outputLog  = [
-      `-- ${script.name} on ${conn.name}`,
-      `-- Executed at ${new Date().toISOString()}`,
-      `-- Duration: ${duration}ms`,
-      ...(result.rowCount > 0 ? [`-- ${result.rowCount} rows affected/returned`] : []),
-      '',
-      script.sql_content,
-    ].join('\n')
-
-    await supabase.from('sandbox_runs').update({
-      status:        'success',
-      output:        outputLog,
-      exec_time_ms:  duration,
-      cpu_impact_pct: null,
-    }).eq('id', runId)
-
-    await logActivity({
-      actorId:    userId,
-      actorName:  '',
-      action:     'sandbox_run',
-      targetType: 'connection',
-      targetId:   conn.id,
-      payload:    { scriptName: script.name, connectionName: conn.name, rowCount: result.rowCount, durationMs: duration },
-    })
-  } catch (err: any) {
-    await supabase.from('sandbox_runs').update({
-      status: 'failed',
-      output: `ERROR: ${err.message}`,
-    }).eq('id', runId)
-
-    await logActivity({
-      actorId:    userId,
-      actorName:  '',
-      action:     'sandbox_run_failed',
-      targetType: 'connection',
-      targetId:   conn.id,
-      payload:    { scriptName: script.name, connectionName: conn.name, error: err.message },
-    }).catch(() => {})
-  }
-}
 
 export default router

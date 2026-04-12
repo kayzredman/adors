@@ -43,6 +43,7 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
 - diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
 - get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
+- propose_remediation(connectionName, command, reason, risk) — proposes a write/remediation action (KILL SESSION, ALTER SYSTEM, FLUSH, etc.) that requires human approval. Use when you find a fixable problem. The user must approve before it executes.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
@@ -51,7 +52,8 @@ Rules:
 - Always refer to connections by their exact name (e.g. FINTRAK_STAGING, REPORTSDB).
 - If the data shows a problem (critical score, blocked sessions, active alerts), proactively call it out.
 - Never fabricate metric values.
-- When suggesting remediation, confirm risk level before proposing destructive commands (ALTER SYSTEM KILL SESSION etc.).
+- When you identify a fixable problem (blocking session, full tablespace, etc.), use propose_remediation to suggest the fix. ALWAYS explain the risk and wait for human approval — do NOT just tell the user to go run the command.
+- Allowed Oracle commands: ALTER SYSTEM KILL/DISCONNECT SESSION, ALTER TABLESPACE ADD DATAFILE, ALTER SYSTEM SET/FLUSH/SWITCH LOGFILE.
 
 Your expertise: Oracle 11g–23c, AWR/ASH, v$session, v$backup_set, v$rman_backup_job_details, wait events, tablespace management, undo/redo pressure, blocking sessions, deadlocks, ORA-errors, Data Guard, SYSDBA operations.
 Be concise — 3–6 sentences unless asked to elaborate.
@@ -73,6 +75,7 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
 - diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
 - get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
+- propose_remediation(connectionName, command, reason, risk) — proposes a write/remediation action (KILL, DBCC, ALTER INDEX, etc.) that requires human approval. Use when you find a fixable problem. The user must approve before it executes.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
@@ -81,6 +84,8 @@ Rules:
 - Always refer to connections by their exact name (e.g. DB STAGING BOX).
 - If the data shows a problem (critical score, blocking spids, memory pressure), proactively call it out.
 - Never fabricate metric values.
+- When you identify a fixable problem (blocking chain, plan cache bloat, fragmented index), use propose_remediation to suggest the fix. ALWAYS explain the risk and wait for approval.
+- Allowed MSSQL commands: KILL <spid>, DBCC FREEPROCCACHE, DBCC DROPCLEANBUFFERS, DBCC SHRINKFILE, ALTER DATABASE, ALTER INDEX REBUILD/REORGANIZE.
 
 Your expertise: SQL Server 2012–2022, Azure SQL, sys.dm_exec_*, sys.dm_os_wait_stats, msdb backup tables, buffer pool, plan cache, Always On AG, blocking chains, CXPACKET/PAGEIOLATCH waits, index fragmentation, query store.
 Be concise — 3–6 sentences unless asked to elaborate.`,
@@ -93,6 +98,7 @@ ADORS gives you REAL live data AND live tool access. You have the following tool
 - get_analytics(connectionName, days) — returns the health score time-series for trend questions.
 - diagnose_performance(connectionName) — runs a COMPREHENSIVE performance diagnostic in ONE call: full metrics snapshot, top wait events, active/blocked sessions, recent alerts, and IO stats. Use this FIRST when asked "why is my database slow?" or any performance troubleshooting question.
 - get_alerts(connectionName?, severity?, limit?) — returns recent alerts from the alert history. Use for incident investigation and active problem review.
+- propose_remediation(connectionName, command, reason, risk) — proposes a write/remediation action (KILL, FLUSH, OPTIMIZE, SET GLOBAL, etc.) that requires human approval. Use when you find a fixable problem. The user must approve before it executes.
 
 Rules:
 - The live snapshot appears in a [Live data from ADORS] block. If the metric is there, quote the actual value.
@@ -101,6 +107,8 @@ Rules:
 - Always refer to connections by their exact name (e.g. UAT_MARIADB_DB_STAGING).
 - If the data shows a problem (critical score, replication lag, low buffer pool hit ratio), proactively call it out.
 - Never fabricate metric values.
+- When you identify a fixable problem (stuck query, slow replication, table fragmentation), use propose_remediation to suggest the fix. ALWAYS explain the risk and wait for approval.
+- Allowed MariaDB commands: KILL <id>, KILL QUERY <id>, FLUSH TABLES, FLUSH QUERY CACHE, OPTIMIZE TABLE, SET GLOBAL.
 
 Your expertise: MariaDB 10.4+, MySQL-compatible, InnoDB buffer pool, SHOW SLAVE STATUS, SHOW PROCESSLIST, information_schema, slow query log, Galera cluster, connection pool, max_connections tuning.
 Be concise — 3–6 sentences unless asked to elaborate.`,
@@ -338,7 +346,66 @@ const AGENT_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'propose_remediation',
+      description:
+        'Proposes a remediation action (KILL SESSION, ALTER SYSTEM, FLUSH, OPTIMIZE, etc.) that requires human approval before execution. ' +
+        'The user will see the exact command and must click "Approve" in the ADORS UI before it runs. ' +
+        'Use this when you identify a fixable problem (blocking session, memory pressure, fragmented index, etc.). ' +
+        'Provide a clear explanation of WHY this action is needed and what RISK it carries. ' +
+        'Only allowed commands from the ADORS allow-list will be accepted.',
+      parameters: {
+        type: 'object',
+        properties: {
+          connectionName: {
+            type: 'string',
+            description: 'Exact connection name to execute the remediation on',
+          },
+          command: {
+            type: 'string',
+            description: 'The exact SQL/command to execute (e.g. ALTER SYSTEM KILL SESSION, KILL 55, DBCC FREEPROCCACHE)',
+          },
+          reason: {
+            type: 'string',
+            description: 'Human-readable explanation of why this remediation is recommended',
+          },
+          risk: {
+            type: 'string',
+            enum: ['low', 'medium', 'high'],
+            description: 'Risk level: low (routine maintenance), medium (service impact possible), high (potential downtime)',
+          },
+        },
+        required: ['connectionName', 'command', 'reason', 'risk'],
+      },
+    },
+  },
 ]
+
+// ─── History trimming ──────────────────────────────────────────────────────────
+// Keeps the most recent messages that fit within `maxChars`.
+// Always keeps the last user message. Drops oldest messages first.
+// Summarises long assistant messages to reduce token waste.
+
+function trimHistory(history: ChatMessage[], maxChars: number): ChatMessage[] {
+  // First pass: compact long assistant messages (tool-result summaries)
+  const compacted = history.map(m => {
+    if (m.role !== 'assistant' || m.content.length <= 1500) return m
+    // Truncate excessively long assistant messages (e.g. embedded tool results)
+    return { ...m, content: m.content.slice(0, 1200) + '\n… (earlier context trimmed)' }
+  })
+
+  // Second pass: drop oldest messages until we fit
+  let totalChars = compacted.reduce((sum, m) => sum + m.content.length, 0)
+  let startIdx = 0
+  while (totalChars > maxChars && startIdx < compacted.length - 1) {
+    totalChars -= compacted[startIdx].content.length
+    startIdx++
+  }
+
+  return compacted.slice(startIdx)
+}
 
 export async function* streamChat(
   botId: BotId,
@@ -355,13 +422,22 @@ export async function* streamChat(
 
   const systemPrompt = SYSTEM_PROMPTS[botId]
   const contextBlock  = context ? buildContextBlock(context) : ''
+  const systemContent = contextBlock ? `${systemPrompt}\n\n${contextBlock}` : systemPrompt
+
+  // ─── History trimming ────────────────────────────────────────────────────
+  // GitHub Models (gpt-4o) enforces an 8 000-token request body limit.
+  // Rough estimate: 1 token ≈ 4 chars. Reserve 1 500 tokens for system prompt
+  // + context block, and 800 tokens for the model's reply budget.
+  // That leaves ~5 700 tokens ≈ 22 800 chars for history.
+  const MAX_HISTORY_CHARS = 22_000
+  const trimmedHistory = trimHistory(history, MAX_HISTORY_CHARS)
 
   // Build mutable message array — we append tool call + result pairs each round.
   // Cast to `any[]` so we can push OpenAI tool-role messages without fighting TS types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messages: any[] = [
-    { role: 'system', content: contextBlock ? `${systemPrompt}\n\n${contextBlock}` : systemPrompt },
-    ...history,
+    { role: 'system', content: systemContent },
+    ...trimmedHistory,
   ]
 
   const tools = onToolCall ? AGENT_TOOLS : undefined

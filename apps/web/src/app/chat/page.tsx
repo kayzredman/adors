@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity, ChevronRight, Wand2, Trash2, Zap, Bell, Stethoscope } from 'lucide-react'
+import { MessageCircle, Send, Sparkles, CheckCircle2, Loader2, AlertCircle, Search, BarChart2, Activity, ChevronRight, Wand2, Trash2, Zap, Bell, Stethoscope, Shield } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { OracleIcon, MssqlIcon, MariaDbIcon } from '@/components/brand/VendorIcons'
@@ -21,6 +21,15 @@ type ToolCallState = {
   errorMsg?:       string
   rows?:           Record<string, unknown>[]
   columns?:        string[]
+  remediation?:    {
+    proposalId:     string
+    command:        string
+    reason:         string
+    risk:           string
+    connectionName: string
+    actionStatus?:  'pending' | 'approving' | 'approved' | 'rejected' | 'failed'
+    actionResult?:  string
+  }
 }
 
 type Message = {
@@ -126,12 +135,92 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: Record<string
 }
 
 // ─── Tool call badge ──────────────────────────────────────────────────────────
+
+const RISK_STYLES: Record<string, string> = {
+  low:    'bg-green-500/15 text-green-400 border-green-500/30',
+  medium: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
+  high:   'bg-red-500/15 text-red-400 border-red-500/30',
+}
+
+function ApprovalCard({ remediation, onAction }: {
+  remediation: NonNullable<ToolCallState['remediation']>
+  onAction: (action: 'approve' | 'reject') => void
+}) {
+  const riskStyle = RISK_STYLES[remediation.risk] ?? RISK_STYLES['medium']
+  const isPending   = remediation.actionStatus === 'pending'
+  const isApproving = remediation.actionStatus === 'approving'
+  const isDone      = remediation.actionStatus === 'approved' || remediation.actionStatus === 'rejected' || remediation.actionStatus === 'failed'
+
+  return (
+    <div className="mt-2 rounded-lg border border-border bg-card/80 p-3 max-w-md">
+      <div className="flex items-center gap-2 mb-2">
+        <Shield className="w-4 h-4 text-amber-400" />
+        <span className="text-xs font-semibold text-foreground">Remediation Proposal</span>
+        <span className={cn('text-[10px] font-bold px-1.5 py-px rounded border uppercase tracking-wide', riskStyle)}>
+          {remediation.risk} risk
+        </span>
+      </div>
+
+      <div className="text-xs text-muted-foreground mb-1">
+        <span className="font-medium text-foreground/80">Target:</span>{' '}
+        {remediation.connectionName}
+      </div>
+
+      <div className="text-xs text-muted-foreground mb-2">
+        <span className="font-medium text-foreground/80">Reason:</span>{' '}
+        {remediation.reason}
+      </div>
+
+      <pre className="text-[11px] font-mono bg-muted/60 rounded px-2 py-1.5 mb-3 overflow-x-auto whitespace-pre-wrap text-foreground/90 border border-border/50">
+        {remediation.command}
+      </pre>
+
+      {isPending && (
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onAction('approve')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-green-600 hover:bg-green-500 text-white transition-colors"
+          >
+            <CheckCircle2 className="w-3 h-3" />
+            Approve &amp; Execute
+          </button>
+          <button
+            onClick={() => onAction('reject')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-muted hover:bg-muted/80 text-foreground border border-border transition-colors"
+          >
+            Reject
+          </button>
+        </div>
+      )}
+
+      {isApproving && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Executing…
+        </div>
+      )}
+
+      {isDone && (
+        <div className={cn('flex items-center gap-2 text-xs font-medium',
+          remediation.actionStatus === 'approved'  ? 'text-green-400' :
+          remediation.actionStatus === 'rejected'  ? 'text-muted-foreground' :
+          'text-red-400'
+        )}>
+          {remediation.actionStatus === 'approved'  && <><CheckCircle2 className="w-3 h-3" /> Executed successfully</>}
+          {remediation.actionStatus === 'rejected'  && <><AlertCircle className="w-3 h-3" /> Rejected</>}
+          {remediation.actionStatus === 'failed'    && <><AlertCircle className="w-3 h-3" /> Failed: {remediation.actionResult}</>}
+        </div>
+      )}
+    </div>
+  )
+}
 const TOOL_ICON: Record<string, React.ElementType> = {
   execute_query:         Search,
   get_fleet_health:      Activity,
   get_analytics:         BarChart2,
   diagnose_performance:  Stethoscope,
   get_alerts:            Bell,
+  propose_remediation:   Shield,
 }
 
 const TOOL_VERB: Record<string, string> = {
@@ -140,6 +229,7 @@ const TOOL_VERB: Record<string, string> = {
   get_analytics:         'Analysing',
   diagnose_performance:  'Diagnosing',
   get_alerts:            'Fetching alerts',
+  propose_remediation:   'Proposing fix',
 }
 
 // ─── Suggested prompts per bot ────────────────────────────────────────────────
@@ -167,7 +257,7 @@ const SUGGESTED_PROMPTS: Record<BotId, { label: string; prompt: string; icon: Re
   ],
 }
 
-function ToolCallBadge({ tc, onRetry }: { tc: ToolCallState; onRetry?: (errorMsg: string) => void }) {
+function ToolCallBadge({ tc, onRetry, onApprovalAction }: { tc: ToolCallState; onRetry?: (errorMsg: string) => void; onApprovalAction?: (proposalId: string, action: 'approve' | 'reject') => void }) {
   const Icon  = TOOL_ICON[tc.name] ?? Search
   const verb  = TOOL_VERB[tc.name] ?? tc.name
   const label = tc.connectionName ? `${verb} ${tc.connectionName}` : verb
@@ -222,6 +312,12 @@ function ToolCallBadge({ tc, onRetry }: { tc: ToolCallState; onRetry?: (errorMsg
       </div>
       {tc.columns && tc.rows && tc.rows.length > 0 && (
         <ResultTable columns={tc.columns} rows={tc.rows} />
+      )}
+      {tc.remediation && onApprovalAction && (
+        <ApprovalCard
+          remediation={tc.remediation}
+          onAction={(action) => onApprovalAction(tc.remediation!.proposalId, action)}
+        />
       )}
     </div>
   )
@@ -323,6 +419,71 @@ function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: stri
     setInput(`The last query failed with: "${errorMsg}". Please diagnose the issue and retry with a corrected query.`)
   }
 
+  async function handleApprovalAction(proposalId: string, action: 'approve' | 'reject') {
+    // Optimistic: set to approving/rejecting
+    setMessages(prev => prev.map(msg => ({
+      ...msg,
+      toolCalls: msg.toolCalls?.map(tc =>
+        tc.remediation?.proposalId === proposalId
+          ? { ...tc, remediation: { ...tc.remediation, actionStatus: action === 'approve' ? 'approving' as const : 'rejected' as const } }
+          : tc
+      ),
+    })))
+
+    if (action === 'reject') {
+      // Fire & forget rejection
+      const { data } = await createClient().auth.getSession()
+      const token = data.session?.access_token ?? ''
+      fetch(`${API_URL}/api/agents/remediation/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ proposalId }),
+      }).catch(() => {})
+      return
+    }
+
+    // Approve & execute
+    try {
+      const { data } = await createClient().auth.getSession()
+      const token = data.session?.access_token ?? ''
+      const res = await fetch(`${API_URL}/api/agents/remediation/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ proposalId }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        setMessages(prev => prev.map(msg => ({
+          ...msg,
+          toolCalls: msg.toolCalls?.map(tc =>
+            tc.remediation?.proposalId === proposalId
+              ? { ...tc, remediation: { ...tc.remediation, actionStatus: 'failed' as const, actionResult: json.error ?? 'Unknown error' } }
+              : tc
+          ),
+        })))
+        return
+      }
+      setMessages(prev => prev.map(msg => ({
+        ...msg,
+        toolCalls: msg.toolCalls?.map(tc =>
+          tc.remediation?.proposalId === proposalId
+            ? { ...tc, remediation: { ...tc.remediation, actionStatus: 'approved' as const, actionResult: json.message } }
+            : tc
+        ),
+      })))
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Network error'
+      setMessages(prev => prev.map(msg => ({
+        ...msg,
+        toolCalls: msg.toolCalls?.map(tc =>
+          tc.remediation?.proposalId === proposalId
+            ? { ...tc, remediation: { ...tc.remediation, actionStatus: 'failed' as const, actionResult: errMsg } }
+            : tc
+        ),
+      })))
+    }
+  }
+
   async function send() {
     const text = input.trim()
     if (!text || sending) return
@@ -335,24 +496,32 @@ function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: stri
     // Build message history (exclude intro messages).
     // For bot messages that executed tool calls, embed a compact result summary
     // into the assistant content so the LLM retains that context on follow-up turns.
+    // Cap each message to avoid hitting the API character limit.
+    const MAX_MSG_CHARS = 2000
     const history = [...messages, userMsg]
       .filter(m => !m.id.startsWith('intro-'))
       .map(m => {
-        if (m.role !== 'bot') return { role: 'user' as const, content: m.content }
+        if (m.role !== 'bot') {
+          return { role: 'user' as const, content: m.content.slice(0, MAX_MSG_CHARS) }
+        }
         let content = stripControlTokens(m.content)
         if (m.toolCalls && m.toolCalls.length > 0) {
           const summaries = m.toolCalls
             .filter(tc => tc.status === 'done')
             .map(tc => {
               if (tc.name === 'execute_query' && tc.rows && tc.columns) {
-                const preview = tc.rows.slice(0, 8).map(row =>
-                  tc.columns!.map(c => `${c}=${row[c] ?? 'null'}`).join(', ')
+                const preview = tc.rows.slice(0, 3).map(row =>
+                  tc.columns!.slice(0, 5).map(c => `${c}=${row[c] ?? 'null'}`).join(', ')
                 ).join(' | ')
                 return `[Tool: ${tc.name}(${tc.connectionName ?? ''}) → ${tc.rowCount} rows${tc.rows.length > 0 ? ': ' + preview : ''}]`
               }
               return `[Tool: ${tc.name}(${tc.connectionName ?? ''}) → completed]`
             })
           if (summaries.length > 0) content = summaries.join('\n') + '\n\n' + content
+        }
+        // Trim long assistant messages to avoid exceeding API limits
+        if (content.length > MAX_MSG_CHARS) {
+          content = content.slice(0, MAX_MSG_CHARS - 30) + '\n… (trimmed)'
         }
         return { role: 'assistant' as const, content }
       })
@@ -426,6 +595,7 @@ function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: stri
                 id: string; status: 'done' | 'error'
                 rowCount?: number; executionMs?: number; error?: string
                 rows?: Record<string, unknown>[]; columns?: string[]
+                remediation?: { proposalId: string; command: string; reason: string; risk: string; connectionName: string }
               }
               setMessages(prev => prev.map(msg => {
                 if (msg.id !== botMsgId) return msg
@@ -434,7 +604,16 @@ function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: stri
                 const toolCalls = (msg.toolCalls ?? []).map(tc => {
                   if (!matched && tc.status === 'running') {
                     matched = true
-                    return { ...tc, status: data.status, rowCount: data.rowCount, executionMs: data.executionMs, errorMsg: data.error, rows: data.rows, columns: data.columns }
+                    return {
+                      ...tc,
+                      status: data.status,
+                      rowCount: data.rowCount,
+                      executionMs: data.executionMs,
+                      errorMsg: data.error,
+                      rows: data.rows,
+                      columns: data.columns,
+                      ...(data.remediation ? { remediation: { ...data.remediation, actionStatus: 'pending' as const } } : {}),
+                    }
                   }
                   return tc
                 })
@@ -518,7 +697,7 @@ function ChatColumn({ botId, connectionId }: { botId: BotId; connectionId?: stri
               {/* Tool call chain — shown as subtle thought steps above the reply */}
               {msg.toolCalls && msg.toolCalls.length > 0 && (
                 <div className="pl-3 border-l-2 border-brand-500/25 space-y-0.5 pb-1">
-                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} onRetry={retryWithError} />)}
+                  {msg.toolCalls.map((tc, i) => <ToolCallBadge key={i} tc={tc} onRetry={retryWithError} onApprovalAction={handleApprovalAction} />)}
                 </div>
               )}
 

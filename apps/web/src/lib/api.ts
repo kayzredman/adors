@@ -69,6 +69,14 @@ export const api = {
   },
   activity: {
     list: (limit = 20) => apiFetch<{ data: unknown[] }>(`/api/activity?limit=${limit}`),
+    search: (params: Record<string, string | number>) => {
+      const qs = new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v !== '' && v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      ).toString()
+      return apiFetch<{ data: unknown[]; total: number; limit: number; offset: number }>(`/api/activity?${qs}`)
+    },
   },
   snapshots: {
     latest: (connectionId: string) =>

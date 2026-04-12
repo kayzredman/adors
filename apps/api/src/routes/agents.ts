@@ -1,3 +1,4 @@
+import crypto from 'node:crypto'
 import { Router } from 'express'
 import { z } from 'zod'
 import { requireAuth } from '../middleware/auth.js'
@@ -24,8 +25,8 @@ const ChatRequestSchema = z.object({
   botId:        z.enum(BOT_IDS),
   messages:     z.array(z.object({
     role:    z.enum(['user', 'assistant']),
-    content: z.string().max(8000),
-  })).min(1).max(50),
+    content: z.string().max(32_000),
+  })).min(1).max(40),
   connectionId: z.string().uuid().optional(),
 })
 
@@ -375,6 +376,47 @@ router.post('/chat', requireAuth, async (req, res) => {
       }
     }
 
+    // ── propose_remediation ──────────────────────────────────────────────────
+    if (name === 'propose_remediation') {
+      const connectionName = String(args['connectionName'] ?? '')
+      const command        = String(args['command'] ?? '')
+      const reason         = String(args['reason'] ?? '')
+      const risk           = String(args['risk'] ?? 'medium')
+
+      if (!connectionName || !command) {
+        return { toolCallId, result: { error: 'connectionName and command are required' } }
+      }
+
+      // Store the pending remediation so the UI can display an approval card.
+      // The actual execution happens via a separate POST /api/agents/remediation/approve endpoint.
+      const proposalId = crypto.randomUUID()
+
+      // Store in Supabase so it survives page reloads
+      await supabase.from('agent_remediations').upsert({
+        id: proposalId,
+        connection_name: connectionName,
+        command,
+        reason,
+        risk,
+        status:     'pending',
+        proposed_by: req.user!.id,
+        db_type:     dbType,
+      })
+
+      return {
+        toolCallId,
+        result: {
+          proposalId,
+          status: 'pending_approval',
+          connectionName,
+          command,
+          reason,
+          risk,
+          message: `Remediation proposed. The user must approve this action in the ADORS UI before it will execute.`,
+        },
+      }
+    }
+
     return { toolCallId, result: { error: `Unknown tool: ${name}` } }
   }
 
@@ -422,6 +464,15 @@ router.post('/chat', requireAuth, async (req, res) => {
               }
               return trimmed
             })
+            // Pass through remediation proposal fields when present
+            const remediation = result['proposalId'] ? {
+              proposalId:     result['proposalId'],
+              command:        result['command'],
+              reason:         result['reason'],
+              risk:           result['risk'],
+              connectionName: result['connectionName'],
+            } : undefined
+
             res.write(`event: tool_result\ndata: ${JSON.stringify({
               id,
               status:      isError ? 'error' : 'done',
@@ -430,6 +481,7 @@ router.post('/chat', requireAuth, async (req, res) => {
               error:       result['error'] ?? undefined,
               rows,
               columns:     cols,
+              ...remediation && { remediation },
             })}\n\n`)
           } catch {
             res.write(`event: tool_result\ndata: ${JSON.stringify({ id, status: 'error', error: 'Parse error' })}\n\n`)
@@ -448,6 +500,143 @@ router.post('/chat', requireAuth, async (req, res) => {
     res.write('data: [DONE]\n\n')
     res.end()
   }
+})
+
+// ─── POST /api/agents/remediation/approve ─────────────────────────────────────
+// Human-in-the-loop: user approves a pending remediation proposed by the agent.
+const ApproveSchema = z.object({
+  proposalId: z.string().uuid(),
+})
+
+router.post('/remediation/approve', requireAuth, async (req, res) => {
+  // Only DBA+ roles may approve remediations
+  if (!req.user || !['dba', 'super_admin'].includes(req.user.role)) {
+    res.status(403).json({ error: 'DBA role required to approve remediations' })
+    return
+  }
+
+  const parsed = ApproveSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Invalid request' })
+    return
+  }
+
+  const { proposalId } = parsed.data
+
+  // Fetch the pending proposal
+  const { data: proposal, error: fetchErr } = await supabase
+    .from('agent_remediations')
+    .select('*')
+    .eq('id', proposalId)
+    .eq('status', 'pending')
+    .single()
+
+  if (fetchErr || !proposal) {
+    res.status(404).json({ error: 'Remediation proposal not found or already processed' })
+    return
+  }
+
+  // Resolve the connection
+  const { data: rawConn } = await supabase
+    .from('connections')
+    .select('id, name, db_type, host, port, database_name, oracle_privilege')
+    .eq('name', proposal.connection_name)
+    .single()
+
+  if (!rawConn) {
+    res.status(404).json({ error: `Connection "${proposal.connection_name}" not found` })
+    return
+  }
+
+  const stored = await getConnectionCredentials(rawConn.id)
+  if (!stored) {
+    res.status(404).json({ error: `No credentials for "${proposal.connection_name}"` })
+    return
+  }
+
+  const creds: DbCredentials = {
+    host:     rawConn.host,
+    port:     rawConn.port,
+    database: rawConn.database_name ?? '',
+    username: stored.username,
+    password: stored.password,
+    options:  rawConn.oracle_privilege ? { privilege: rawConn.oracle_privilege } : undefined,
+  }
+
+  const adapter = await getAdapter(rawConn.db_type)
+  if (!adapter) {
+    res.status(400).json({ error: `No adapter for db_type "${rawConn.db_type}"` })
+    return
+  }
+
+  try {
+    const result = await adapter.executeRemediation(creds, proposal.command, 30_000)
+
+    // Update status
+    await supabase.from('agent_remediations').update({
+      status:      result.success ? 'executed' : 'failed',
+      approved_by: req.user.id,
+      approved_at: new Date().toISOString(),
+      result:      result.message,
+    }).eq('id', proposalId)
+
+    // Audit log
+    logActivity({
+      actorId:    req.user.id,
+      actorName:  req.user.email,
+      action:     result.success ? 'agent_remediation_executed' : 'agent_remediation_failed',
+      targetType: 'connection',
+      targetId:   rawConn.id,
+      payload:    {
+        proposalId,
+        connectionName: proposal.connection_name,
+        command:         proposal.command,
+        reason:          proposal.reason,
+        risk:            proposal.risk,
+        result:          result.message,
+        executionMs:     result.executionMs,
+      },
+    }).catch(() => {})
+
+    res.json({ data: { ...result, proposalId } })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+
+    await supabase.from('agent_remediations').update({
+      status:      'failed',
+      approved_by: req.user.id,
+      approved_at: new Date().toISOString(),
+      result:      msg,
+    }).eq('id', proposalId)
+
+    logActivity({
+      actorId:    req.user.id,
+      actorName:  req.user.email,
+      action:     'agent_remediation_failed',
+      targetType: 'connection',
+      targetId:   rawConn.id,
+      payload:    { proposalId, connectionName: proposal.connection_name, command: proposal.command, error: msg },
+    }).catch(() => {})
+
+    res.status(500).json({ error: msg })
+  }
+})
+
+// ─── POST /api/agents/remediation/reject ──────────────────────────────────────
+router.post('/remediation/reject', requireAuth, async (req, res) => {
+  const parsed = ApproveSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Invalid request' })
+    return
+  }
+
+  await supabase.from('agent_remediations').update({
+    status:      'rejected',
+    approved_by: req.user!.id,
+    approved_at: new Date().toISOString(),
+  }).eq('id', parsed.data.proposalId).eq('status', 'pending')
+
+  res.json({ data: { status: 'rejected' } })
 })
 
 export default router

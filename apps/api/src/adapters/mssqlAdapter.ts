@@ -4,7 +4,8 @@
  * so MssqlDetailPanel works unchanged.
  */
 
-import type { DbAdapter, DbCredentials } from './types.js'
+import type { DbAdapter, DbCredentials, RemediationResult } from './types.js'
+import { REMEDIATION_ALLOW_LIST } from './types.js'
 
 /** Reject anything that isn't a read-only statement. */
 function validateReadOnlySql(sql: string): void {
@@ -40,13 +41,19 @@ export class MssqlAdapter implements DbAdapter {
     })
 
     try {
-      const [version, memory, sessions, waits, blocking, cpuIo, backups, diskMounts, haState, filegroupBreakdown, osMemory] = await Promise.all([
+      // Split into two sequential groups to avoid slamming the target server
+      // with 11 concurrent queries.  Group 1 is core metrics (must succeed),
+      // Group 2 is optional/heavier queries (can fail gracefully).
+      const [version, memory, sessions, waits, blocking, cpuIo] = await Promise.all([
         this.#queryVersion(pool),
         this.#queryMemory(pool),
         this.#querySessions(pool),
         this.#queryWaits(pool),
         this.#queryBlocking(pool),
         this.#queryCpuIo(pool),
+      ])
+
+      const [backups, diskMounts, haState, filegroupBreakdown, osMemory] = await Promise.all([
         this.#queryBackups(pool).catch(() => []),
         this.#queryDiskMounts(pool).catch(() => []),
         this.#queryHaState(pool).catch(() => ({ type: 'none', details: [] })),
@@ -590,6 +597,34 @@ export class MssqlAdapter implements DbAdapter {
       system_memory_state:  String(row.system_memory_state_desc ?? 'unknown'),
       kernel_paged_gb:      Math.round(Number(row.kernel_paged_pool_kb ?? 0) / 1048576 * 100) / 100,
       kernel_nonpaged_gb:   Math.round(Number(row.kernel_nonpaged_pool_kb ?? 0) / 1048576 * 100) / 100,
+    }
+  }
+
+  async executeRemediation(creds: DbCredentials, command: string, timeoutMs = 15_000): Promise<RemediationResult> {
+    const normalized = command.trim().replace(/\s+/g, ' ').toUpperCase()
+    const patterns = REMEDIATION_ALLOW_LIST['mssql'] ?? []
+    if (!patterns.some(p => p.test(normalized))) {
+      throw new Error(`Command not in allow-list: ${normalized.slice(0, 80)}`)
+    }
+    const mssqlMod = await import('mssql')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mssql: typeof import('mssql') = (mssqlMod as any).default ?? mssqlMod
+    let pool: any
+    const start = Date.now()
+    try {
+      pool = await mssql.connect({
+        user: creds.username, password: creds.password,
+        server: creds.host, port: creds.port, database: creds.database,
+        options: { trustServerCertificate: true, encrypt: false },
+        connectionTimeout: 5000, requestTimeout: timeoutMs,
+      })
+      await pool.request().query(command)
+      return { success: true, message: 'Command executed successfully', executionMs: Date.now() - start }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, message: msg, executionMs: Date.now() - start }
+    } finally {
+      pool?.close()
     }
   }
 }

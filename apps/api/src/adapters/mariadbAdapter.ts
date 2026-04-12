@@ -4,7 +4,8 @@
  * the mock adapter's metric shape for MariaDbDetailPanel.
  */
 
-import type { DbAdapter, DbCredentials } from './types.js'
+import type { DbAdapter, DbCredentials, RemediationResult } from './types.js'
+import { REMEDIATION_ALLOW_LIST } from './types.js'
 
 /** Reject anything that isn't a read-only statement. */
 function validateReadOnlySql(sql: string): void {
@@ -334,6 +335,31 @@ export class MariaDbAdapter implements DbAdapter {
       handler_read_rnd_next:  status['Handler_read_rnd_next'] ?? 0,
       handler_read_key:       status['Handler_read_key'] ?? 0,
       created_tmp_files:      status['Created_tmp_files'] ?? 0,
+    }
+  }
+
+  async executeRemediation(creds: DbCredentials, command: string, timeoutMs = 15_000): Promise<RemediationResult> {
+    const normalized = command.trim().replace(/\s+/g, ' ').toUpperCase()
+    const patterns = REMEDIATION_ALLOW_LIST['mariadb'] ?? []
+    if (!patterns.some(p => p.test(normalized))) {
+      throw new Error(`Command not in allow-list: ${normalized.slice(0, 80)}`)
+    }
+    const mariadb = await import('mariadb')
+    let conn: any
+    const start = Date.now()
+    try {
+      conn = await mariadb.createConnection({
+        host: creds.host, port: creds.port, database: creds.database,
+        user: creds.username, password: creds.password,
+        connectTimeout: 5000, socketTimeout: timeoutMs,
+      })
+      await conn.query(command)
+      return { success: true, message: 'Command executed successfully', executionMs: Date.now() - start }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return { success: false, message: msg, executionMs: Date.now() - start }
+    } finally {
+      conn?.end().catch(() => {})
     }
   }
 }
