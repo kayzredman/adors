@@ -26,7 +26,7 @@ const ChatRequestSchema = z.object({
   messages:     z.array(z.object({
     role:    z.enum(['user', 'assistant']),
     content: z.string().max(32_000),
-  })).min(1).max(40),
+  })).min(1).max(200),
   connectionId: z.string().uuid().optional(),
 })
 
