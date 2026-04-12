@@ -116,6 +116,12 @@ function mockOracleHealth(conn: DbConnection): HealthMetrics {
       tablespace_usage_pct:  tablespacePct,
       redo_log_switches_hr:  Math.floor(Math.random() * 20),
       sga_hit_ratio_pct:     Math.floor(Math.random() * 10) + 90,
+      // ── Blocking & I/O ────────────────────────────
+      blocking_spids:        blockedSessions,
+      deadlocks_total:       Math.floor(Math.random() * 2),
+      disk_reads_per_sec:    Math.floor(Math.random() * 3000) + 500,
+      disk_writes_per_sec:   Math.floor(Math.random() * 1500) + 200,
+      io_chart:              timeSeries(2000, 1000),
       // ── Tablespace utilization (disk_mounts) ─────
       disk_mounts: [
         { mount: 'SYSTEM',     total_gb: 0.89, used_gb: 0.87, free_gb: 0.02, used_pct: 97.8 },
@@ -261,6 +267,12 @@ function mockMariaDbHealth(conn: DbConnection): HealthMetrics {
       // ── Table Locks ───────────────────────────────
       table_lock_waited:    Math.floor(Math.random() * 10),
       table_lock_immediate: Math.floor(Math.random() * 500) + 100,
+      // ── Blocking & I/O ────────────────────────────
+      blocking_sessions:    isProd ? Math.floor(Math.random() * 3) : 0,
+      deadlocks_total:      Math.floor(Math.random() * 2),
+      disk_reads_per_sec:   Math.floor(Math.random() * 5000) + 1000,
+      disk_writes_per_sec:  Math.floor(Math.random() * 2000) + 500,
+      io_chart:             timeSeries(3000, 1500),
     },
   }
 }

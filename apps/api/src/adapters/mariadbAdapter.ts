@@ -35,12 +35,13 @@ export class MariaDbAdapter implements DbAdapter {
     })
 
     try {
-      const [globalStatus, innodbStatus, replStatus, diskMounts, osLike] = await Promise.all([
+      const [globalStatus, innodbStatus, replStatus, diskMounts, osLike, blockingIo] = await Promise.all([
         this.#queryGlobalStatus(conn),
         this.#queryInnodbStatus(conn),
         this.#queryReplication(conn),
         this.#queryDiskMounts(conn).catch(() => []),
         this.#queryOsLike(conn).catch(() => ({ physical_memory_gb: 0, max_connections: 0, open_files_limit: 0, open_files: 0, open_tables: 0, tmp_disk_tables: 0, tmp_memory_tables: 0, cpu_threads: 0, handler_read_rnd_next: 0, handler_read_key: 0, created_tmp_files: 0 })),
+        this.#queryBlockingIo(conn).catch(() => ({ blocking_sessions: 0, deadlocks_total: 0, innodb_data_reads: 0, innodb_data_writes: 0 })),
       ])
 
       const get = (map: Record<string, string>, key: string) => Number(map[key] ?? 0)
@@ -116,6 +117,12 @@ export class MariaDbAdapter implements DbAdapter {
         // Table Locks
         table_lock_waited:    tableLocks,
         table_lock_immediate: get(globalStatus, 'Table_locks_immediate'),
+        // Blocking & I/O
+        blocking_sessions:    blockingIo.blocking_sessions,
+        deadlocks_total:      blockingIo.deadlocks_total,
+        disk_reads_per_sec:   blockingIo.innodb_data_reads,
+        disk_writes_per_sec:  blockingIo.innodb_data_writes,
+        io_chart:             [{ t: new Date().toISOString(), v: blockingIo.innodb_data_reads + blockingIo.innodb_data_writes }],
         // Storage — derive totals from schema sizes (OS disk not accessible via SQL)
         disk_usage_pct: diskMounts.length > 0 ? Math.min(99, Math.round(diskMounts.reduce((s, d) => s + d.used_gb, 0) / Math.max(diskMounts.reduce((s, d) => s + d.used_gb, 0) * 1.4, 0.001) * 100)) : 0,
         disk_used_gb:   +diskMounts.reduce((s, d) => s + d.used_gb, 0).toFixed(2),
@@ -266,6 +273,28 @@ export class MariaDbAdapter implements DbAdapter {
       free_gb:     0,
       used_pct:    100,
     }))
+  }
+
+  async #queryBlockingIo(conn: any) {
+    // Blocking: count transactions in LOCK WAIT state
+    const [lockRows] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.INNODB_TRX WHERE trx_state = 'LOCK WAIT'`
+    ).catch(() => [[{ cnt: 0 }]])
+
+    // Deadlocks + I/O from GLOBAL STATUS
+    const [statusRows] = await conn.query(`
+      SELECT variable_name, variable_value FROM information_schema.global_status
+      WHERE variable_name IN ('Innodb_deadlocks','Innodb_data_reads','Innodb_data_writes')
+    `)
+    const st: Record<string, number> = {}
+    for (const r of (statusRows as any[])) st[r.variable_name] = Number(r.variable_value ?? 0)
+
+    return {
+      blocking_sessions:  Number((lockRows as any[])[0]?.cnt ?? 0),
+      deadlocks_total:    st['Innodb_deadlocks'] ?? 0,
+      innodb_data_reads:  st['Innodb_data_reads'] ?? 0,
+      innodb_data_writes: st['Innodb_data_writes'] ?? 0,
+    }
   }
 
   async #queryOsLike(conn: any) {

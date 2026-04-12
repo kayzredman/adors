@@ -212,6 +212,12 @@ export class OracleAdapter implements DbAdapter {
         sga_hit_ratio_pct:    0,
         // Backup history (RMAN)
         backup_history: backups,
+        // Blocking & I/O
+        blocking_spids:       sessions.blocked,
+        deadlocks_total:      sysstat.enqueue_deadlocks,
+        disk_reads_per_sec:   sysstat.physical_reads,
+        disk_writes_per_sec:  sysstat.physical_writes,
+        io_chart:             [{ t: new Date().toISOString(), v: sysstat.physical_reads + sysstat.physical_writes }],
         // Disk / tablespace utilization
         disk_mounts:    diskMounts,
         // HA / Data Guard state
@@ -402,6 +408,7 @@ export class OracleAdapter implements DbAdapter {
       'execute count', 'parse count (total)', 'opened cursors current',
       'user commits', 'db block gets', 'logical reads', 'redo size',
       'bytes sent via SQL*Net to client', 'bytes received via SQL*Net from client',
+      'physical reads', 'physical writes', 'enqueue deadlocks',
     ]
     const binds = STATS.map((_, i) => `:${i + 1}`)
     const { rows } = await conn.execute(
@@ -423,6 +430,9 @@ export class OracleAdapter implements DbAdapter {
       net_out:              Math.round(get('bytes sent via SQL*Net to client') / 1024),
       avg_response_ms:      0,
       db_cpu_ratio:         0,
+      physical_reads:       get('physical reads'),
+      physical_writes:      get('physical writes'),
+      enqueue_deadlocks:    get('enqueue deadlocks'),
     }
   }
 

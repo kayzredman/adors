@@ -211,8 +211,8 @@ export function OracleDetailPanel({ metrics: m, name }: OracleDetailPanelProps) 
         </div>
       </div>
 
-      {/* ── Row 2: Sessions | Waits | DB CPU ──────────────────────── */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* ── Row 2: Sessions | Waits | DB CPU | Blocking & I/O ─── */}
+      <div className="grid grid-cols-4 gap-4">
         {/* Sessions */}
         <div className="rounded-xl border border-border bg-card p-4 space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</p>
@@ -242,6 +242,37 @@ export function OracleDetailPanel({ metrics: m, name }: OracleDetailPanelProps) 
             format={(v) => `${v}%`}
           />
           <p className="text-2xl font-bold tabular-nums text-success text-center">{m.db_cpu_ratio_pct}%</p>
+        </div>
+
+        {/* Blocking & I/O */}
+        <div className="rounded-xl border border-border bg-card p-4 space-y-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Blocking & Deadlocks</p>
+            <div className="flex justify-between text-sm mt-1">
+              <span className="text-muted-foreground">Blocked Sessions</span>
+              <span className={`font-bold tabular-nums ${(m.blocking_spids ?? m.sessions_blocked ?? 0) > 0 ? 'text-critical' : 'text-success'}`}>
+                {m.blocking_spids ?? m.sessions_blocked ?? 0}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Enqueue Deadlocks</span>
+              <span className={`font-bold tabular-nums ${(m.deadlocks_total ?? 0) > 0 ? 'text-warning' : 'text-success'}`}>
+                {m.deadlocks_total ?? 0}
+              </span>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Disk I/O</p>
+            <Sparkline data={m.io_chart ?? []} color="#10B981" height={55} />
+            <div className="flex justify-between text-sm mt-1">
+              <span className="text-muted-foreground">Physical Reads</span>
+              <span className="font-mono tabular-nums text-foreground">{(m.disk_reads_per_sec ?? 0).toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Physical Writes</span>
+              <span className="font-mono tabular-nums text-foreground">{(m.disk_writes_per_sec ?? 0).toLocaleString()}</span>
+            </div>
+          </div>
         </div>
       </div>
 
