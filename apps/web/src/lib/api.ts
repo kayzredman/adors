@@ -195,4 +195,38 @@ export const api = {
     overview: () =>
       apiFetch<{ data: any }>('/api/admin/services/overview'),
   },
+  dr: {
+    listPairs: () =>
+      apiFetch<{ data: any[] }>('/api/dr/pairs'),
+    getPair: (id: string) =>
+      apiFetch<{ data: any }>(`/api/dr/pairs/${id}`),
+    createPair: (body: { prod_connection_id: string; dr_connection_id: string; rpo_target_minutes?: number; rto_target_minutes?: number; notes?: string }) =>
+      apiFetch<{ data: any }>('/api/dr/pairs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updatePair: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ data: any }>(`/api/dr/pairs/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    deletePair: (id: string) =>
+      apiFetch<{ message: string }>(`/api/dr/pairs/${id}`, { method: 'DELETE' }),
+    listDrills: (pairId?: string) => {
+      const qs = pairId ? `?pair_id=${pairId}` : ''
+      return apiFetch<{ data: any[] }>(`/api/dr/drills${qs}`)
+    },
+    createDrill: (body: { pair_id: string; result: string; started_at: string; completed_at?: string; duration_min?: number; rpo_actual_min?: number; rto_actual_min?: number; notes?: string }) =>
+      apiFetch<{ data: any }>('/api/dr/drills', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    updateDrill: (id: string, body: Record<string, unknown>) =>
+      apiFetch<{ data: any }>(`/api/dr/drills/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    deleteDrill: (id: string) =>
+      apiFetch<{ message: string }>(`/api/dr/drills/${id}`, { method: 'DELETE' }),
+  },
 }

@@ -20,6 +20,7 @@ import {
   UserCircle2,
   Settings,
   HeartPulse,
+  Shield,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -34,6 +35,7 @@ const NAV_ITEMS = [
   { href: '/alerts',      label: 'Alerts Center', icon: Bell,            minRole: 'viewer'  },
   { href: '/scripts',     label: 'Script Library', icon: BookOpen,       minRole: 'analyst' },
   { href: '/sandbox',     label: 'UAT Sandbox',   icon: FlaskConical,    minRole: 'dba'     },
+  { href: '/dr',          label: 'DR Management', icon: Shield,          minRole: 'dba'     },
   { href: '/connections', label: 'Connections',   icon: Database,        minRole: 'analyst' },
 ]
 

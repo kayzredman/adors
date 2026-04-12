@@ -79,3 +79,18 @@ insert into public.alerts (connection_id, severity, status, type, message) value
   ('11111111-0000-0000-0000-000000000001', 'warning',  'acknowledged', 'blocked_sessions',      '3 sessions blocked — chain blocking detected'),
   ('11111111-0000-0000-0000-000000000003', 'warning',  'active',       'high_memory_usage',     'Buffer pool consuming 89% of available RAM'),
   ('11111111-0000-0000-0000-000000000005', 'info',     'resolved',     'health_scan',           'Scheduled 5-minute health scan completed — 96% healthy');
+
+-- ─── DR Pairs (production ↔ DR) ─────────────────────────────────────────────
+
+insert into public.dr_pairs (id, prod_connection_id, dr_connection_id, rpo_target_minutes, rto_target_minutes, notes) values
+  ('22222222-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000001', '11111111-0000-0000-0000-000000000007', 15, 60, 'Oracle Data Guard — async redo shipping'),
+  ('22222222-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000003', '11111111-0000-0000-0000-000000000008', 30, 120, 'SQL Server Always On AG — async replicas');
+
+-- ─── DR Drills (historical test events) ─────────────────────────────────────
+
+insert into public.dr_drills (pair_id, result, started_at, completed_at, duration_min, rpo_actual_min, rto_actual_min, notes) values
+  ('22222222-0000-0000-0000-000000000001', 'pass',    '2026-03-15 09:00:00+00', '2026-03-15 09:42:00+00', 42, 8, 42,  'Switchover to DR site completed successfully. Redo apply gap was 8 minutes.'),
+  ('22222222-0000-0000-0000-000000000001', 'pass',    '2026-01-10 14:00:00+00', '2026-01-10 14:55:00+00', 55, 12, 55, 'Q1 DR test — clean switchover with minor TNS reconfiguration delay.'),
+  ('22222222-0000-0000-0000-000000000001', 'partial', '2025-10-05 10:00:00+00', '2025-10-05 11:30:00+00', 90, 22, 90, 'Switchover succeeded but rollback took longer than expected.'),
+  ('22222222-0000-0000-0000-000000000002', 'pass',    '2026-03-20 11:00:00+00', '2026-03-20 12:15:00+00', 75, 18, 75, 'AG failover to DR replica. Cluster reconfiguration required manual DNS update.'),
+  ('22222222-0000-0000-0000-000000000002', 'fail',    '2025-12-01 09:00:00+00', '2025-12-01 11:00:00+00', 120, 45, 120, 'Failover failed due to network partition between sites. Escalated to infra team.');

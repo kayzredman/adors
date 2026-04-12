@@ -191,6 +191,54 @@ services:
     depends_on:
       - api
 
+  # ── Supabase: Studio (DB GUI) ──────────────────────────────────────────────
+  supabase-studio:
+    image: supabase/studio:2026.04.08-sha-205cbe7
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    environment:
+      HOSTNAME: "::"
+      STUDIO_PG_META_URL: http://supabase-meta:8080
+      POSTGRES_HOST: supabase-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supersecret}
+      SUPABASE_URL: http://supabase-kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q}
+      AUTH_JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_DB_SCHEMAS: public,storage,graphql_public
+      PGRST_DB_EXTRA_SEARCH_PATH: public
+      DEFAULT_ORGANIZATION_NAME: ADORS
+      DEFAULT_PROJECT_NAME: ADORS Mission Control
+      NEXT_PUBLIC_ENABLE_LOGS: "false"
+      NEXT_ANALYTICS_BACKEND_PROVIDER: ""
+    depends_on:
+      supabase-meta:
+        condition: service_healthy
+
+  # ── Supabase: pg-meta (metadata API for Studio) ───────────────────────────
+  supabase-meta:
+    image: supabase/postgres-meta:v0.96.3
+    restart: unless-stopped
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: supabase-db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: postgres
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD:-supersecret}
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   # ── Nginx (dev reverse proxy) ──────────────────────────────
   nginx:
     image: nginx:alpine

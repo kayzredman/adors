@@ -99,6 +99,34 @@ export interface ActivityLogEntry {
     payload?: Record<string, unknown>;
     created_at: string;
 }
+export type DrillResult = 'pass' | 'fail' | 'partial' | 'aborted';
+export interface DrPair {
+    id: string;
+    prod_connection_id: string;
+    dr_connection_id: string;
+    rpo_target_minutes: number;
+    rto_target_minutes: number;
+    notes?: string;
+    created_by?: string;
+    created_at: string;
+    updated_at: string;
+    prod_connection?: DbConnection;
+    dr_connection?: DbConnection;
+}
+export interface DrDrill {
+    id: string;
+    pair_id: string;
+    result: DrillResult;
+    started_at: string;
+    completed_at?: string;
+    duration_min?: number;
+    rpo_actual_min?: number;
+    rto_actual_min?: number;
+    notes?: string;
+    run_by?: string;
+    created_at: string;
+    run_by_name?: string;
+}
 export interface ApiResponse<T = unknown> {
     data?: T;
     error?: string;

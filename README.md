@@ -26,6 +26,10 @@ All health data collected every minute is permanently stored and queryable for t
 | **Connections Manager** | Register and manage all DB connections, trigger manual health scans |
 | **Analytics** | Time-series health trends, tablespace growth projections, backup trends, anomaly scoring for every connection |
 | **User Management** | Invite-based onboarding, role assignment, account deactivation — `super_admin` only |
+| **Settings** | User profile, password change, TOTP MFA enrol/unenrol, AAL2 enforcement |
+| **Admin Services Health** | Live health status of infrastructure services — DB, Redis, GoTrue, Kong, PostgREST |
+| **Notification Channels** | WhatsApp (Baileys) + Teams webhook configuration, per-severity dispatch rules |
+| **DR Management** | Production ↔ DR pair mapping, failover drill tracking, RPO/RTO targets vs actuals, readiness dashboard |
 
 ---
 
@@ -40,14 +44,18 @@ Browser (Next.js :3002)
   │     Bearer JWT (verified locally via JWT_SECRET)      │
   │                                                        ├─► Supabase Postgres (user_profiles, connections,
   │                                                        │   health_snapshots, alerts, scripts, activity_log,
-  │                                                        │   chat_sessions)
+  │                                                        │   chat_sessions, notification_channels,
+  │                                                        │   dr_pairs, dr_drills)
   │                                                        ├─► Live DB fleet (Oracle / MSSQL / MariaDB adapters)
   │                                                        ├─► Redis / BullMQ (health scan job queues)
   │                                                        └─► GitHub Models API (GPT-4o-mini, SSE stream)
   │
   └─► Supabase Auth (:8000 via Kong)
-        signIn / signOut / invite / token refresh
-        GoTrue validates JWTs; Kong routes to GoTrue + PostgREST
+  │     signIn / signOut / invite / token refresh
+  │     GoTrue validates JWTs; Kong routes to GoTrue + PostgREST
+  │
+  └─► Supabase Studio (:3100)
+        Visual DB explorer — tables, SQL editor, logs
 ```
 
 ### Detailed Service Architecture
@@ -66,6 +74,10 @@ Browser (Next.js :3002)
 │    /login             Email/password + optional TOTP MFA challenge        │
 │    /onboarding/profile  Invite token → set password + display name       │
 │    /onboarding/mfa    Enrol TOTP (for roles with MFA required)            │
+│    /settings          User profile, password, MFA settings               │
+│    /admin/services    Infrastructure service health (admin+)             │
+│    /alerts/…          Notification channel config (admin+)               │
+│    /dr                DR pair management + drill history (DBA+)          │
 │    /setup             First-run admin account creation                    │
 │                                                                           │
 │  Key client libraries:                                                    │
@@ -111,6 +123,24 @@ Browser (Next.js :3002)
 │    PATCH  /api/admin/users/:id/name  — update display name               │
 │    POST   /api/admin/users/:id/deactivate   — soft-deactivate             │
 │    POST   /api/admin/users/:id/reactivate   — restore access             │
+│    GET    /api/settings               — user settings + MFA status       │
+│    PATCH  /api/settings               — update display name / password   │
+│    POST   /api/settings/mfa/enrol     — begin TOTP enrolment             │
+│    POST   /api/settings/mfa/verify    — verify TOTP factor               │
+│    POST   /api/settings/mfa/unenrol   — remove TOTP factor               │
+│    GET    /api/notifications          — notification channels list       │
+│    POST   /api/notifications          — create channel                   │
+│    PATCH  /api/notifications/:id      — update channel                   │
+│    DELETE /api/notifications/:id      — remove channel                   │
+│    POST   /api/notifications/test     — test channel delivery            │
+│    GET    /api/services               — infrastructure service health    │
+│    GET    /api/dr/pairs               — list DR pairs                    │
+│    POST   /api/dr/pairs               — create pair                     │
+│    PATCH  /api/dr/pairs/:id           — update pair                     │
+│    DELETE /api/dr/pairs/:id           — delete pair                     │
+│    GET    /api/dr/pairs/:id           — pair detail with drills          │
+│    GET    /api/dr/drills              — list all drills                  │
+│    POST   /api/dr/drills              — record drill                    │
 │                                                                           │
 │  Workers (BullMQ):                                                        │
 │    priority-scan  (every 1 min)   — critical + warning connections        │
@@ -139,13 +169,18 @@ Browser (Next.js :3002)
 │  activity_log       │      │  packages/agents                         │
 │  user_profiles      │      │  streamChat() — async generator          │
 │  chat_sessions      │      │  Tool definitions (OpenAI function spec) │
-└─────────────────────┘      │  buildContextBlock() — live fleet summary│
-                             │  GitHub Models API (GPT-4o-mini)         │
-┌─────────────────────┐      │    → tool_call loop (max 5 rounds)       │
-│  Redis (:6379)      │      │    → execute_query / get_fleet_health    │
-│  BullMQ job queues  │      │    → trend_chart / get_analytics         │
-│  Scheduler lock     │      └─────────────────────────────────────────┘
-└─────────────────────┘
+│  notification_channels│    │  buildContextBlock() — live fleet summary│
+│  dr_pairs           │      │  GitHub Models API (GPT-4o-mini)         │
+│  dr_drills          │      │    → tool_call loop (max 5 rounds)       │
+└─────────────────────┘      │    → execute_query / get_fleet_health    │
+                             │    → trend_chart / get_analytics         │
+                             └─────────────────────────────────────────┘
+
+┌─────────────────────┐      ┌─────────────────────────────────────────┐
+│  Redis (:6379)      │      │  Supabase Studio (:3100)                 │
+│  BullMQ job queues  │      │  Visual DB explorer, SQL editor          │
+│  Scheduler lock     │      │  postgres-meta v0.96.3                   │
+└─────────────────────┘      └─────────────────────────────────────────┘
 ```
 
 ---
@@ -239,6 +274,9 @@ adors/
 │   │       │   ├── admin/users/    # User management (super_admin only)
 │   │       │   ├── login/          # Login + TOTP MFA challenge
 │   │       │   ├── onboarding/     # profile/ (invite accept) + mfa/ (TOTP setup)
+│   │       │   ├── settings/       # User profile, password, MFA settings
+│   │       │   ├── admin/services/ # Infrastructure service health
+│   │       │   ├── dr/             # DR Management — pairs + drill tracking
 │   │       │   └── setup/          # First-run admin bootstrap
 │   │       ├── components/
 │   │       │   ├── dashboard/      # Health cards, gauges, activity feed
@@ -262,11 +300,16 @@ adors/
 │           │   ├── agents.ts       # SSE chat + tool calling
 │           │   ├── sandbox.ts      # Script execution engine
 │           │   ├── scripts.ts      # Script catalog
-│           │   └── admin.ts        # User management (invite, roles, deactivate)
+│           │   ├── admin.ts        # User management (invite, roles, deactivate)
+│           │   ├── settings.ts     # User settings + MFA enrol/unenrol
+│           │   ├── notifications.ts # Notification channel CRUD + test
+│           │   ├── services.ts     # Infrastructure service health
+│           │   └── dr.ts           # DR pair CRUD + drill recording
 │           ├── services/
 │           │   ├── healthScanner.ts  # Scan orchestration, batching
 │           │   ├── connectionService.ts
-│           │   └── activityService.ts
+│           │   ├── activityService.ts
+│           │   └── notificationService.ts  # Channel dispatch (WhatsApp / Teams)
 │           ├── adapters/
 │           │   ├── oracleAdapter.ts  # thin→thick, 11g compat, executeQuery
 │           │   ├── mssqlAdapter.ts   # DMV metrics, executeQuery
@@ -288,7 +331,7 @@ adors/
 │   │   └── src/index.ts            # streamChat(), tool definitions,
 │   │                               # buildContextBlock(), fleet context
 │   ├── db/
-│   │   ├── migrations/             # SQL schema migrations (001–006)
+│   │   ├── migrations/             # SQL schema migrations (001–008)
 │   │   └── seeds/                  # Dev seed data
 │   └── shared/                     # Shared TypeScript types
 │       └── src/index.ts            # DbConnection, HealthSnapshot, Alert, etc.
@@ -314,9 +357,10 @@ adors/
 | **Phase 5** | ✅ | Agentic tool calling — bots run queries, return charts, diagnose live data |
 | **Phase 6** | ✅ | Script execution engine — sandbox verify → prod exec, audit trail |
 | **Phase 7** | ✅ | User management — invite flow, role assignment, admin page, onboarding |
-| **Phase 8** | Next | Settings page — user profile, password change, TOTP enrol/unenrol |
-| **Phase 9** | Next | WhatsApp (Baileys) + Teams notifications, alert webhooks |
-| **Phase 10** | Planned | Docker prod hardening, security audit, AAL2 enforcement |
+| **Phase 8** | ✅ | Settings — user profile, password change, TOTP MFA enrol/unenrol, AAL2 enforcement |
+| **Phase 9** | ✅ | Notifications — WhatsApp (Baileys) + Teams webhook channels, admin services health |
+| **Phase 10** | ✅ | Docker prod hardening, Supabase Studio, DR Management (pairs + drills + readiness) |
+| **Phase 11** | Next | Reports — capacity trends, fleet health, DR readiness, incident, audit trail + PDF/CSV export |
 
 ---
 
