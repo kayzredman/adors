@@ -11,11 +11,13 @@ import {
   ClipboardList,
   Loader2,
   Database,
-  Server,
-  HardDrive,
   ChevronDown,
   ChevronUp,
   Filter,
+  Settings2,
+  GitCompare,
+  X,
+  Check,
 } from 'lucide-react'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -45,11 +47,49 @@ const DB_COLORS: Record<string, string> = {
 
 const PIE_COLORS = ['#22c55e', '#f59e0b', '#ef4444', '#6b7280', '#3b82f6']
 
+// ─── Threshold defaults ──────────────────────────────────────────────────────
+
+interface Threshold {
+  metric_key: string
+  label: string
+  warning_threshold: number
+  critical_threshold: number
+  unit: string
+}
+
+const DEFAULT_THRESHOLDS: Threshold[] = [
+  { metric_key: 'storage_pct',     label: 'Storage Usage',    warning_threshold: 70, critical_threshold: 85, unit: '%' },
+  { metric_key: 'connections_pct', label: 'Connection Usage',  warning_threshold: 70, critical_threshold: 85, unit: '%' },
+  { metric_key: 'memory_pct',      label: 'Memory Usage',      warning_threshold: 70, critical_threshold: 85, unit: '%' },
+  { metric_key: 'cpu_pct',         label: 'CPU Usage',         warning_threshold: 70, critical_threshold: 85, unit: '%' },
+]
+
+function getThreshold(thresholds: Threshold[], key: string) {
+  return thresholds.find(t => t.metric_key === key) ?? DEFAULT_THRESHOLDS.find(t => t.metric_key === key)!
+}
+
+function thresholdColor(value: number | null, thresholds: Threshold[], key: string): string {
+  if (value == null) return 'text-muted-foreground'
+  const t = getThreshold(thresholds, key)
+  if (value >= t.critical_threshold) return 'text-red-500'
+  if (value >= t.warning_threshold) return 'text-amber-500'
+  return 'text-green-500'
+}
+
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function ReportsPage() {
   const [tab, setTab] = useState<ReportTab>('capacity')
   const [days, setDays] = useState(30)
+  const [thresholds, setThresholds] = useState<Threshold[]>(DEFAULT_THRESHOLDS)
+  const [showThresholds, setShowThresholds] = useState(false)
+
+  // Load thresholds once
+  useEffect(() => {
+    api.settings.getThresholds()
+      .then(r => { if (r.data?.length) setThresholds(r.data) })
+      .catch(() => {})
+  }, [])
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1600px] mx-auto">
@@ -60,7 +100,16 @@ export default function ReportsPage() {
             Fleet analytics, capacity planning, incident history &amp; audit trail
           </p>
         </div>
-        <DaysSelector value={days} onChange={setDays} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowThresholds(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+            title="Configure thresholds"
+          >
+            <Settings2 size={14} /> Thresholds
+          </button>
+          <DaysSelector value={days} onChange={setDays} />
+        </div>
       </div>
 
       {/* Tab Bar */}
@@ -83,12 +132,21 @@ export default function ReportsPage() {
 
       {/* Tab Content */}
       <div className="mt-2">
-        {tab === 'capacity'     && <CapacityTab days={days} />}
+        {tab === 'capacity'     && <CapacityTab days={days} thresholds={thresholds} />}
         {tab === 'fleet'        && <FleetTab />}
         {tab === 'dr-readiness' && <DrReadinessTab />}
         {tab === 'incidents'    && <IncidentsTab days={days} />}
         {tab === 'audit'        && <AuditTab days={days} />}
       </div>
+
+      {/* Threshold Config Modal */}
+      {showThresholds && (
+        <ThresholdModal
+          thresholds={thresholds}
+          onClose={() => setShowThresholds(false)}
+          onSave={(updated) => { setThresholds(updated); setShowThresholds(false) }}
+        />
+      )}
     </div>
   )
 }
@@ -110,6 +168,117 @@ function DaysSelector({ value, onChange }: { value: number; onChange: (d: number
           {d}d
         </button>
       ))}
+    </div>
+  )
+}
+
+// ─── Threshold Config Modal ──────────────────────────────────────────────────
+
+function ThresholdModal({
+  thresholds,
+  onClose,
+  onSave,
+}: {
+  thresholds: Threshold[]
+  onClose: () => void
+  onSave: (t: Threshold[]) => void
+}) {
+  const [draft, setDraft] = useState<Threshold[]>(thresholds.map(t => ({ ...t })))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const update = (key: string, field: 'warning_threshold' | 'critical_threshold', value: number) => {
+    setDraft(prev => prev.map(t => t.metric_key === key ? { ...t, [field]: value } : t))
+  }
+
+  const handleSave = async () => {
+    // Validate: warning < critical
+    for (const t of draft) {
+      if (t.warning_threshold >= t.critical_threshold) {
+        setError(`${t.label}: warning must be less than critical`)
+        return
+      }
+    }
+    setSaving(true)
+    setError('')
+    try {
+      await api.settings.updateThresholds(
+        draft.map(t => ({ metric_key: t.metric_key, warning_threshold: t.warning_threshold, critical_threshold: t.critical_threshold }))
+      )
+      onSave(draft)
+    } catch (e: any) {
+      setError(e.message ?? 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className="bg-card rounded-xl border border-border shadow-xl w-full max-w-lg mx-4 p-6"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-lg font-semibold">Metric Thresholds</h2>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X size={18} />
+          </button>
+        </div>
+
+        <p className="text-xs text-muted-foreground mb-4">
+          Configure warning and critical thresholds for capacity metrics. Values are percentages.
+        </p>
+
+        <div className="space-y-4">
+          {draft.map(t => (
+            <div key={t.metric_key} className="grid grid-cols-[1fr_100px_100px] gap-3 items-center">
+              <span className="text-sm font-medium">{t.label}</span>
+              <div>
+                <label className="text-[10px] text-muted-foreground uppercase">Warning</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={t.warning_threshold}
+                  onChange={e => update(t.metric_key, 'warning_threshold', Number(e.target.value))}
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded-lg bg-background text-amber-500 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-muted-foreground uppercase">Critical</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={t.critical_threshold}
+                  onChange={e => update(t.metric_key, 'critical_threshold', Number(e.target.value))}
+                  className="w-full px-2 py-1.5 text-sm border border-border rounded-lg bg-background text-red-500 font-semibold"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {error && <p className="text-xs text-red-500 mt-3">{error}</p>}
+
+        <div className="flex justify-end gap-2 mt-6">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-1.5"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Save
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -184,11 +353,13 @@ function StatPill({ label, value, color }: { label: string; value: string | numb
 // TAB 1: Capacity Trends
 // ═════════════════════════════════════════════════════════════════════════════
 
-function CapacityTab({ days }: { days: number }) {
+function CapacityTab({ days, thresholds }: { days: number; thresholds: Threshold[] }) {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [compareMode, setCompareMode] = useState(false)
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     setLoading(true)
@@ -229,39 +400,83 @@ function CapacityTab({ days }: { days: number }) {
           <StatPill label="Avg Connections" value={`${avg('connections_pct')}%`} />
           <StatPill label="Avg Memory" value={`${avg('memory_pct')}%`} />
         </div>
-        <ExportButton onClick={exportCsv} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setCompareMode(!compareMode); setCompareIds(new Set()) }}
+            className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border rounded-lg transition-colors shadow-sm ${
+              compareMode
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border hover:bg-muted'
+            }`}
+          >
+            <GitCompare size={14} /> {compareMode ? 'Exit Compare' : 'Compare'}
+          </button>
+          <ExportButton onClick={exportCsv} />
+        </div>
       </div>
+
+      {/* Comparison overlay charts */}
+      {compareMode && compareIds.size >= 2 && (
+        <ComparisonPanel
+          connections={conns.filter(c => compareIds.has(c.connection_id))}
+          thresholds={thresholds}
+        />
+      )}
+      {compareMode && compareIds.size < 2 && (
+        <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg px-4 py-3 border border-border/50">
+          Select 2–5 connections below to compare side by side
+        </div>
+      )}
 
       {/* Per-connection cards */}
       {conns.map(conn => (
         <Card key={conn.connection_id}>
-          <button
-            className="w-full flex items-center justify-between gap-4"
-            onClick={() => setExpandedId(expandedId === conn.connection_id ? null : conn.connection_id)}
-          >
-            <div className="flex items-center gap-3 min-w-0">
-              <div className="p-2 rounded-lg bg-muted/60">
-                <Database size={16} className="text-muted-foreground" />
-              </div>
-              <div className="text-left min-w-0">
-                <span className="font-semibold text-sm">{conn.connection_name}</span>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className="text-[11px] px-1.5 py-0.5 rounded-md font-medium" style={{ backgroundColor: DB_COLORS[conn.db_type] + '18', color: DB_COLORS[conn.db_type] }}>
-                    {conn.db_type}
-                  </span>
-                  <span className="text-[11px] text-muted-foreground capitalize">{conn.environment}</span>
+          <div className="flex items-center gap-3">
+            {compareMode && (
+              <input
+                type="checkbox"
+                checked={compareIds.has(conn.connection_id)}
+                onChange={() => {
+                  setCompareIds(prev => {
+                    const next = new Set(prev)
+                    if (next.has(conn.connection_id)) next.delete(conn.connection_id)
+                    else if (next.size < 5) next.add(conn.connection_id)
+                    return next
+                  })
+                }}
+                className="h-4 w-4 rounded border-border accent-primary shrink-0"
+              />
+            )}
+            <button
+              className="w-full flex items-center justify-between gap-4"
+              onClick={() => !compareMode && setExpandedId(expandedId === conn.connection_id ? null : conn.connection_id)}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 rounded-lg bg-muted/60">
+                  <Database size={16} className="text-muted-foreground" />
+                </div>
+                <div className="text-left min-w-0">
+                  <span className="font-semibold text-sm">{conn.connection_name}</span>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-[11px] px-1.5 py-0.5 rounded-md font-medium" style={{ backgroundColor: DB_COLORS[conn.db_type] + '18', color: DB_COLORS[conn.db_type] }}>
+                      {conn.db_type}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground capitalize">{conn.environment}</span>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="flex items-center gap-5 shrink-0">
-              <CapacityMini label="Storage" value={conn.current.storage_pct} />
-              <CapacityMini label="Conn" value={conn.current.connections_pct} />
-              <CapacityMini label="Memory" value={conn.current.memory_pct} />
-              <div className="text-muted-foreground">
-                {expandedId === conn.connection_id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              <div className="flex items-center gap-5 shrink-0">
+                <CapacityMini label="Storage" value={conn.current.storage_pct} color={thresholdColor(conn.current.storage_pct, thresholds, 'storage_pct')} />
+                <CapacityMini label="Conn" value={conn.current.connections_pct} color={thresholdColor(conn.current.connections_pct, thresholds, 'connections_pct')} />
+                <CapacityMini label="Memory" value={conn.current.memory_pct} color={thresholdColor(conn.current.memory_pct, thresholds, 'memory_pct')} />
+                {!compareMode && (
+                  <div className="text-muted-foreground">
+                    {expandedId === conn.connection_id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </div>
+                )}
               </div>
-            </div>
-          </button>
+            </button>
+          </div>
 
           {expandedId === conn.connection_id && conn.trend.length > 0 && (
             <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -283,9 +498,9 @@ function CapacityTab({ days }: { days: number }) {
   )
 }
 
-function CapacityMini({ label, value }: { label: string; value: number | null }) {
+function CapacityMini({ label, value, color: colorOverride }: { label: string; value: number | null; color?: string }) {
   const pct = value ?? 0
-  const color = pct > 85 ? 'text-red-500' : pct > 70 ? 'text-amber-500' : 'text-green-500'
+  const color = colorOverride ?? (pct > 85 ? 'text-red-500' : pct > 70 ? 'text-amber-500' : 'text-green-500')
   return (
     <div className="text-right">
       <div className="text-[10px] text-muted-foreground">{label}</div>
@@ -322,6 +537,115 @@ function CapacityChart({ data, dataKey, label, color }: { data: any[]; dataKey: 
         </AreaChart>
       </ResponsiveContainer>
     </div>
+  )
+}
+
+// ─── Comparison Panel ────────────────────────────────────────────────────────
+
+const COMPARE_COLORS = ['#3b82f6', '#ef4444', '#22c55e', '#f59e0b', '#8b5cf6']
+
+function ComparisonPanel({ connections, thresholds }: { connections: any[]; thresholds: Threshold[] }) {
+  const metrics = [
+    { key: 'storage_pct', label: 'Storage %', thresholdKey: 'storage_pct' },
+    { key: 'connections_pct', label: 'Connections %', thresholdKey: 'connections_pct' },
+    { key: 'memory_pct', label: 'Memory %', thresholdKey: 'memory_pct' },
+  ]
+
+  // Merge trends onto shared time axis
+  const buildOverlay = (metricKey: string) => {
+    const dateMap: Record<string, Record<string, number>> = {}
+    connections.forEach((conn, idx) => {
+      for (const point of conn.trend ?? []) {
+        const t = new Date(point.t).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })
+        if (!dateMap[t]) dateMap[t] = { t: t as any }
+        dateMap[t][`v${idx}`] = point[metricKey] ?? 0
+      }
+    })
+    return Object.values(dateMap).sort((a, b) => String(a.t).localeCompare(String(b.t)))
+  }
+
+  return (
+    <Card className="!p-6">
+      <h3 className="text-sm font-semibold mb-1 flex items-center gap-2">
+        <GitCompare size={15} /> Comparison — {connections.map(c => c.connection_name).join(' vs ')}
+      </h3>
+      <p className="text-xs text-muted-foreground mb-4">Overlay views for selected connections</p>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {metrics.map(m => {
+          const overlayData = buildOverlay(m.key)
+          const t = getThreshold(thresholds, m.thresholdKey)
+          return (
+            <div key={m.key}>
+              <h4 className="text-xs font-medium text-muted-foreground mb-2">{m.label}</h4>
+              <ResponsiveContainer width="100%" height={180}>
+                <LineChart data={overlayData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="t" tick={{ fontSize: 9 }} stroke="hsl(var(--muted-foreground))" />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} stroke="hsl(var(--muted-foreground))" />
+                  <Tooltip contentStyle={{ fontSize: 11, borderRadius: 8 }} />
+                  {/* Threshold reference lines */}
+                  <CartesianGrid y={t.warning_threshold} strokeDasharray="0" />
+                  {connections.map((conn, idx) => (
+                    <Line
+                      key={conn.connection_id}
+                      type="monotone"
+                      dataKey={`v${idx}`}
+                      name={conn.connection_name}
+                      stroke={COMPARE_COLORS[idx % COMPARE_COLORS.length]}
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  ))}
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Side-by-side current values */}
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted-foreground border-b border-border">
+              <th className="pb-2 pr-4">Connection</th>
+              <th className="pb-2 pr-4">Type</th>
+              <th className="pb-2 pr-4">Storage</th>
+              <th className="pb-2 pr-4">Connections</th>
+              <th className="pb-2 pr-4">Memory</th>
+              <th className="pb-2">Throughput</th>
+            </tr>
+          </thead>
+          <tbody>
+            {connections.map((conn, idx) => (
+              <tr key={conn.connection_id} className="border-b border-border/50 last:border-0">
+                <td className="py-2 pr-4 font-medium flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COMPARE_COLORS[idx % COMPARE_COLORS.length] }} />
+                  {conn.connection_name}
+                </td>
+                <td className="py-2 pr-4">
+                  <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ backgroundColor: DB_COLORS[conn.db_type] + '20', color: DB_COLORS[conn.db_type] }}>
+                    {conn.db_type}
+                  </span>
+                </td>
+                <td className={`py-2 pr-4 font-semibold ${thresholdColor(conn.current.storage_pct, thresholds, 'storage_pct')}`}>
+                  {conn.current.storage_pct != null ? `${conn.current.storage_pct}%` : '—'}
+                </td>
+                <td className={`py-2 pr-4 font-semibold ${thresholdColor(conn.current.connections_pct, thresholds, 'connections_pct')}`}>
+                  {conn.current.connections_pct != null ? `${conn.current.connections_pct}%` : '—'}
+                </td>
+                <td className={`py-2 pr-4 font-semibold ${thresholdColor(conn.current.memory_pct, thresholds, 'memory_pct')}`}>
+                  {conn.current.memory_pct != null ? `${conn.current.memory_pct}%` : '—'}
+                </td>
+                <td className="py-2 text-muted-foreground">{conn.current.throughput ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   )
 }
 

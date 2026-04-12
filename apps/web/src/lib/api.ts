@@ -168,6 +168,13 @@ export const api = {
         method: 'DELETE',
         body: JSON.stringify({ factor_id }),
       }),
+    getThresholds: () =>
+      apiFetch<{ data: { metric_key: string; label: string; warning_threshold: number; critical_threshold: number; unit: string }[] }>('/api/settings/thresholds'),
+    updateThresholds: (thresholds: { metric_key: string; warning_threshold: number; critical_threshold: number }[]) =>
+      apiFetch<{ message: string }>('/api/settings/thresholds', {
+        method: 'PUT',
+        body: JSON.stringify({ thresholds }),
+      }),
   },
   notifications: {
     listChannels: () =>

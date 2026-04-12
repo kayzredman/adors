@@ -133,4 +133,66 @@ router.delete('/mfa', requireAuth, requireAAL2, async (req, res) => {
   }
 })
 
+// ─── GET /api/settings/thresholds ────────────────────────────────────────────
+// Returns all metric thresholds
+router.get('/thresholds', requireAuth, async (_req, res) => {
+  try {
+    const { supabase } = await import('../config/supabase.js')
+    const { data, error } = await supabase
+      .from('metric_thresholds')
+      .select('metric_key,label,warning_threshold,critical_threshold,unit')
+      .order('label')
+    if (error) throw error
+    res.json({ data: data ?? [] })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to load thresholds' })
+  }
+})
+
+// ─── PUT /api/settings/thresholds ────────────────────────────────────────────
+// Bulk-update thresholds (DBA+ only)
+const thresholdSchema = z.object({
+  thresholds: z.array(z.object({
+    metric_key: z.string().min(1),
+    warning_threshold: z.number().min(0).max(100),
+    critical_threshold: z.number().min(0).max(100),
+  })),
+})
+
+router.put('/thresholds', requireAuth, async (req, res) => {
+  // Require dba or super_admin role
+  const role = req.user?.role ?? ''
+  if (!['dba', 'super_admin'].includes(role)) {
+    res.status(403).json({ error: 'DBA role required' })
+    return
+  }
+
+  const parsed = thresholdSchema.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0].message })
+    return
+  }
+
+  try {
+    const { supabase } = await import('../config/supabase.js')
+
+    for (const t of parsed.data.thresholds) {
+      const { error } = await supabase
+        .from('metric_thresholds')
+        .update({
+          warning_threshold: t.warning_threshold,
+          critical_threshold: t.critical_threshold,
+          updated_at: new Date().toISOString(),
+          updated_by: req.user!.id,
+        })
+        .eq('metric_key', t.metric_key)
+      if (error) throw error
+    }
+
+    res.json({ message: 'Thresholds updated' })
+  } catch (err: any) {
+    res.status(500).json({ error: err.message ?? 'Failed to update thresholds' })
+  }
+})
+
 export default router
