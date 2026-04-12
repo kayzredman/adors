@@ -22,6 +22,29 @@ export interface DbAdapter {
    * Returns the result or throws an error.
    */
   executeRemediation(creds: DbCredentials, command: string, timeoutMs?: number): Promise<RemediationResult>
+
+  // ─── Tiered metric queries ──────────────────────────────────────────────
+  // Split health metrics into 3 tiers with different freshness requirements.
+  // The health scanner uses Redis TTL cache to avoid re-running queries
+  // whose cached results are still fresh.
+
+  /**
+   * HOT tier — session/blocking/waits/HA state.
+   * Changes second-to-second. Cached for 90s.
+   */
+  queryHotMetrics(creds: DbCredentials): Promise<Record<string, unknown>>
+
+  /**
+   * WARM tier — memory/CPU/IO/disk utilization.
+   * Drifts over minutes. Cached for 10 min.
+   */
+  queryWarmMetrics(creds: DbCredentials): Promise<Record<string, unknown>>
+
+  /**
+   * COLD tier — version/backups/static config.
+   * Changes hourly/daily. Cached for 30 min.
+   */
+  queryColdMetrics(creds: DbCredentials): Promise<Record<string, unknown>>
 }
 
 export interface DbCredentials {

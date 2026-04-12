@@ -1,6 +1,8 @@
 import type { DbConnection, HealthSnapshot, HealthStatus } from '@adors/shared'
 import { supabase } from '../config/supabase.js'
+import { redis } from '../config/redis.js'
 import { getAdapter } from '../adapters/index.js'
+import type { DbAdapter, DbCredentials } from '../adapters/types.js'
 import { getConnectionCredentials } from './connectionService.js'
 import { dispatchAlertNotifications } from './notificationService.js'
 
@@ -301,7 +303,7 @@ async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
   }
 
   const defaultPorts: Record<string, number> = { oracle: 1521, mssql: 1433, mariadb: 3306 }
-  const dbCreds = {
+  const dbCreds: DbCredentials = {
     host:     conn.host,
     port:     conn.port ?? defaultPorts[conn.db_type] ?? 3306,
     database: conn.service_name ?? conn.database_name ?? '',
@@ -311,7 +313,7 @@ async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
   }
 
   const adapter = await getAdapter(conn.db_type as 'oracle' | 'mssql' | 'mariadb')
-  const details = await adapter.getHealthMetrics(dbCreds)  // throws on failure — intentional
+  const details = await getTieredMetrics(conn.id, adapter, dbCreds)
 
   const score  = deriveScore(conn.db_type as string, details)
   const status: HealthStatus = score >= 80 ? 'healthy' : score >= 60 ? 'warning' : 'critical'
@@ -323,6 +325,54 @@ async function getMetrics(conn: DbConnection): Promise<HealthMetrics> {
     active_alerts: 0,
     details: { ...details, adapter: 'live' },
   }
+}
+
+// ─── Tiered Redis cache ──────────────────────────────────────────────────────
+
+const TIER_TTL = { hot: 90, warm: 600, cold: 1800 } as const
+
+/**
+ * For each tier (hot / warm / cold), serve from Redis if cached,
+ * otherwise query the adapter and store with appropriate TTL.
+ * Merge all 3 tier results into a single flat metrics object.
+ */
+async function getTieredMetrics(
+  connectionId: string,
+  adapter: DbAdapter,
+  creds: DbCredentials,
+): Promise<Record<string, unknown>> {
+  const prefix = `adors:metrics:${connectionId}`
+
+  // Read all 3 caches in parallel
+  const [cachedHot, cachedWarm, cachedCold] = await Promise.all([
+    redis.get(`${prefix}:hot`),
+    redis.get(`${prefix}:warm`),
+    redis.get(`${prefix}:cold`),
+  ])
+
+  // For any missing tier, query the adapter and cache
+  const [hot, warm, cold] = await Promise.all([
+    cachedHot
+      ? JSON.parse(cachedHot) as Record<string, unknown>
+      : adapter.queryHotMetrics(creds).then(async (m) => {
+          await redis.set(`${prefix}:hot`, JSON.stringify(m), 'EX', TIER_TTL.hot)
+          return m
+        }),
+    cachedWarm
+      ? JSON.parse(cachedWarm) as Record<string, unknown>
+      : adapter.queryWarmMetrics(creds).then(async (m) => {
+          await redis.set(`${prefix}:warm`, JSON.stringify(m), 'EX', TIER_TTL.warm)
+          return m
+        }),
+    cachedCold
+      ? JSON.parse(cachedCold) as Record<string, unknown>
+      : adapter.queryColdMetrics(creds).then(async (m) => {
+          await redis.set(`${prefix}:cold`, JSON.stringify(m), 'EX', TIER_TTL.cold)
+          return m
+        }),
+  ])
+
+  return { ...cold, ...warm, ...hot }  // hot wins on key conflicts
 }
 
 function deriveScore(dbType: string, details: Record<string, unknown>): number {

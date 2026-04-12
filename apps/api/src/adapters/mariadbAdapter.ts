@@ -338,6 +338,155 @@ export class MariaDbAdapter implements DbAdapter {
     }
   }
 
+  // ─── Tiered metric helpers ───────────────────────────────────────────────
+
+  /** Open a short-lived mysql2 connection from raw creds */
+  async #openConn(creds: DbCredentials) {
+    const mysqlMod = await import('mysql2/promise').catch(() => { throw new Error('mysql2 not installed') })
+    const mysql: typeof import('mysql2/promise') = (mysqlMod as any).default ?? mysqlMod
+    return mysql.createConnection({
+      host: creds.host, port: creds.port, database: creds.database,
+      user: creds.username, password: creds.password,
+      connectTimeout: 10000,
+      ...((creds.options ?? {}) as any),
+    })
+  }
+
+  /** HOT: replication, blocking & IO — 90s TTL */
+  async queryHotMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const conn = await this.#openConn(creds)
+    try {
+      const [replStatus, blockingIo] = await Promise.all([
+        this.#queryReplication(conn),
+        this.#queryBlockingIo(conn).catch(() => ({ blocking_sessions: 0, deadlocks_total: 0, innodb_data_reads: 0, innodb_data_writes: 0 })),
+      ])
+      return {
+        replication_running:         replStatus.is_running,
+        replication_io_running:      replStatus.io_running,
+        replication_sql_running:     replStatus.sql_running,
+        replication_lag_sec:         replStatus.lag_sec,
+        replication_lag_chart:       [{ t: new Date().toISOString(), v: replStatus.lag_sec }],
+        replication_master_host:     replStatus.master_host,
+        replication_master_log_file: replStatus.master_log_file,
+        replication_master_log_pos:  replStatus.master_log_pos,
+        replication_relay_log_file:  replStatus.relay_log_file,
+        replication_relay_log_pos:   replStatus.relay_log_pos,
+        replication_last_error:      replStatus.last_error,
+        blocking_sessions:    blockingIo.blocking_sessions,
+        deadlocks_total:      blockingIo.deadlocks_total,
+        disk_reads_per_sec:   blockingIo.innodb_data_reads,
+        disk_writes_per_sec:  blockingIo.innodb_data_writes,
+        io_chart:             [{ t: new Date().toISOString(), v: blockingIo.innodb_data_reads + blockingIo.innodb_data_writes }],
+      }
+    } finally {
+      await conn.end()
+    }
+  }
+
+  /** WARM: global status, innodb, disk mounts, OS proxies — 10min TTL */
+  async queryWarmMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const conn = await this.#openConn(creds)
+    try {
+      const [globalStatus, innodbStatus, diskMounts, osLike] = await Promise.all([
+        this.#queryGlobalStatus(conn),
+        this.#queryInnodbStatus(conn),
+        this.#queryDiskMounts(conn).catch(() => []),
+        this.#queryOsLike(conn).catch(() => ({ physical_memory_gb: 0, max_connections: 0, open_files_limit: 0, open_files: 0, open_tables: 0, tmp_disk_tables: 0, tmp_memory_tables: 0, cpu_threads: 0, handler_read_rnd_next: 0, handler_read_key: 0, created_tmp_files: 0 })),
+      ])
+      const get = (map: Record<string, string>, key: string) => Number(map[key] ?? 0)
+      const threadsConnected = get(globalStatus, 'Threads_connected')
+      const threadsRunning   = get(globalStatus, 'Threads_running')
+      const maxConn          = get(globalStatus, 'Max_used_connections') || 151
+      const bpPages    = get(globalStatus, 'Innodb_buffer_pool_pages_total')
+      const bpFree     = get(globalStatus, 'Innodb_buffer_pool_pages_free')
+      const bpUsed     = bpPages - bpFree
+      const hitRatio   = bpPages > 0 ? Math.round((bpUsed / bpPages) * 100) : 0
+      const queries    = get(globalStatus, 'Queries')
+      const selects    = get(globalStatus, 'Com_select')
+      const inserts    = get(globalStatus, 'Com_insert')
+      const updates    = get(globalStatus, 'Com_update')
+      const deletes    = get(globalStatus, 'Com_delete')
+      const slowQs     = get(globalStatus, 'Slow_queries')
+      const tableLocks = get(globalStatus, 'Table_locks_waited')
+      const bpSizeMb   = get(innodbStatus, 'bp_size_bytes') / 1024 / 1024
+      const rowsRead   = get(innodbStatus, 'rows_read')
+      const rowsWritten = get(innodbStatus, 'rows_inserted') + get(innodbStatus, 'rows_updated') + get(innodbStatus, 'rows_deleted')
+      return {
+        active_connections:  threadsConnected,
+        max_connections:     maxConn,
+        thread_cache_size:   get(globalStatus, 'thread_cache_size'),
+        threads_running:     threadsRunning,
+        connection_chart:    [{ t: new Date().toISOString(), v: threadsConnected }],
+        innodb_buffer_pool_size_gb:  Math.round(bpSizeMb / 1024 * 10) / 10,
+        innodb_buffer_hit_ratio_pct: hitRatio,
+        innodb_buffer_read_requests: get(globalStatus, 'Innodb_buffer_pool_read_requests'),
+        innodb_buffer_reads:         get(globalStatus, 'Innodb_buffer_pool_reads'),
+        innodb_rows_read_per_sec:    rowsRead,
+        innodb_rows_written_per_sec: rowsWritten,
+        buffer_hit_chart:  [{ t: new Date().toISOString(), v: hitRatio }],
+        innodb_io_chart:   [{ t: new Date().toISOString(), v: 0 }],
+        slow_queries_per_min:    slowQs,
+        slow_query_log_enabled:  get(globalStatus, 'slow_query_log') === 1,
+        long_query_time_sec:     get(globalStatus, 'long_query_time') || 2,
+        slow_query_chart:        [{ t: new Date().toISOString(), v: slowQs }],
+        queries_per_sec:  queries,
+        select_per_s:     selects,
+        select_per_sec:   selects,
+        insert_per_sec:   inserts,
+        update_per_sec:   updates,
+        delete_per_sec:   deletes,
+        query_chart: [{ t: new Date().toISOString(), total: queries, select: selects, insert: inserts, update: updates, delete: deletes }],
+        table_lock_waited:    tableLocks,
+        table_lock_immediate: get(globalStatus, 'Table_locks_immediate'),
+        disk_usage_pct: diskMounts.length > 0 ? Math.min(99, Math.round(diskMounts.reduce((s: number, d: any) => s + d.used_gb, 0) / Math.max(diskMounts.reduce((s: number, d: any) => s + d.used_gb, 0) * 1.4, 0.001) * 100)) : 0,
+        disk_used_gb:   +diskMounts.reduce((s: number, d: any) => s + d.used_gb, 0).toFixed(2),
+        disk_total_gb:  +(diskMounts.reduce((s: number, d: any) => s + d.used_gb, 0) * 1.4).toFixed(2),
+        disk_io_chart:  [{ t: new Date().toISOString(), v: 0 }],
+        disk_mounts: diskMounts,
+        os_physical_memory_gb: osLike.physical_memory_gb,
+        os_memory_usage_pct: osLike.physical_memory_gb > 0
+          ? Math.round(bpSizeMb / 1024 / osLike.physical_memory_gb * 100) : 0,
+        os_cpu_threads:          osLike.cpu_threads,
+        os_max_connections:      osLike.max_connections,
+        os_open_files_limit:     osLike.open_files_limit,
+        os_open_files:           osLike.open_files,
+        os_open_tables:          osLike.open_tables,
+        os_tmp_disk_tables:      osLike.tmp_disk_tables,
+        os_tmp_memory_tables:    osLike.tmp_memory_tables,
+        os_handler_read_rnd_next: osLike.handler_read_rnd_next,
+        os_handler_read_key:     osLike.handler_read_key,
+        os_created_tmp_files:    osLike.created_tmp_files,
+      }
+    } finally {
+      await conn.end()
+    }
+  }
+
+  /** COLD: version, uptime, backup (static) — 30min TTL */
+  async queryColdMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const conn = await this.#openConn(creds)
+    try {
+      const [vRows] = await conn.query(`
+        SELECT variable_name, variable_value FROM information_schema.global_status
+        WHERE variable_name IN ('version','Uptime')
+        UNION ALL
+        SELECT variable_name, variable_value FROM information_schema.global_variables
+        WHERE variable_name = 'version'
+      `)
+      const map: Record<string, string> = {}
+      for (const r of (vRows as any[])) map[r.variable_name] = r.variable_value
+      return {
+        db_version:     map['version'] ?? 'unknown',
+        uptime_days:    Math.floor(Number(map['Uptime'] ?? 0) / 86400),
+        os:             'Linux x86_64',
+        cpus:           0,
+        backup_history: [],
+      }
+    } finally {
+      await conn.end()
+    }
+  }
+
   async executeRemediation(creds: DbCredentials, command: string, timeoutMs = 15_000): Promise<RemediationResult> {
     const normalized = command.trim().replace(/\s+/g, ' ').toUpperCase()
     const patterns = REMEDIATION_ALLOW_LIST['mariadb'] ?? []

@@ -627,4 +627,114 @@ export class MssqlAdapter implements DbAdapter {
       pool?.close()
     }
   }
+
+  // ─── Tiered metric helpers ───────────────────────────────────────────────
+
+  async #openPool(creds: DbCredentials) {
+    const mssqlMod = await import('mssql').catch(() => {
+      throw new Error('mssql package not installed. Run: pnpm add mssql')
+    })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mssql: typeof import('mssql') = (mssqlMod as any).default ?? mssqlMod
+    return mssql.connect({
+      user: creds.username, password: creds.password,
+      server: creds.host, port: creds.port, database: creds.database,
+      options: { trustServerCertificate: true, encrypt: false, ...((creds.options ?? {}) as any) },
+      connectionTimeout: 10000, requestTimeout: 15000,
+    })
+  }
+
+  /** HOT: sessions, blocking, waits, HA state, CPU/IO counters — 90s TTL */
+  async queryHotMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const pool = await this.#openPool(creds)
+    try {
+      const [sessions, waits, blocking, cpuIo, haState] = await Promise.all([
+        this.#querySessions(pool),
+        this.#queryWaits(pool),
+        this.#queryBlocking(pool),
+        this.#queryCpuIo(pool),
+        this.#queryHaState(pool).catch(() => ({ type: 'none', details: [] })),
+      ])
+      return {
+        active_connections:  sessions.active,
+        max_connections:     sessions.max_allowed,
+        connection_chart:    sessions.chart,
+        top_wait_types:      waits.top,
+        blocking_spids:      blocking.count,
+        blocking_chart:      blocking.chart,
+        deadlocks_per_min:   cpuIo.deadlocks,
+        batch_requests_sec:  cpuIo.batch_req_per_s,
+        avg_query_time_ms:   cpuIo.avg_exec_ms,
+        cpu_usage_pct:       cpuIo.cpu_pct,
+        compilations_sec:    cpuIo.compilations,
+        recompilations_sec:  cpuIo.recompilations,
+        cpu_chart:           cpuIo.cpu_chart,
+        query_perf_chart:    cpuIo.cpu_chart,
+        disk_reads_per_sec:  cpuIo.disk_io.reads_per_s,
+        disk_writes_per_sec: cpuIo.disk_io.writes_per_s,
+        io_chart:            cpuIo.disk_io.io_chart,
+        ha_state:            haState,
+        // nested shapes kept for compat
+        connections: { active: sessions.active, max_allowed: sessions.max_allowed, chart: sessions.chart, batch_req_per_s: cpuIo.batch_req_per_s },
+        disk_io: cpuIo.disk_io,
+        query_perf: { avg_exec_ms: cpuIo.avg_exec_ms, cpu_pct: cpuIo.cpu_pct, batch_req_per_s: cpuIo.batch_req_per_s, compilations_per_s: cpuIo.compilations, chart: cpuIo.cpu_chart },
+      }
+    } finally {
+      await pool.close()
+    }
+  }
+
+  /** WARM: memory, OS memory, disk mounts, filegroup breakdown — 10min TTL */
+  async queryWarmMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const pool = await this.#openPool(creds)
+    try {
+      const [memory, osMemory, diskMounts, filegroupBreakdown] = await Promise.all([
+        this.#queryMemory(pool),
+        this.#queryOsMemory(pool).catch(() => ({ total_gb: 0, available_gb: 0, usage_pct: 0, system_memory_state: 'unknown', kernel_paged_gb: 0, kernel_nonpaged_gb: 0 })),
+        this.#queryDiskMounts(pool).catch(() => []),
+        this.#queryFilegroupBreakdown(pool).catch(() => []),
+      ])
+      return {
+        buffer_pool_memory_pct:  memory.buffer_pool_pct,
+        target_server_memory_gb: memory.target_gb,
+        total_server_memory_gb:  memory.current_gb,
+        page_life_expectancy_sec: memory.ple,
+        memory_pressure_chart:   memory.chart,
+        disk_mounts:             diskMounts,
+        filegroup_breakdown:     filegroupBreakdown,
+        os_physical_memory_gb:   osMemory.total_gb,
+        os_available_memory_gb:  osMemory.available_gb,
+        os_memory_usage_pct:     osMemory.usage_pct,
+        os_system_memory_state:  osMemory.system_memory_state,
+        os_kernel_paged_gb:      osMemory.kernel_paged_gb,
+        os_kernel_nonpaged_gb:   osMemory.kernel_nonpaged_gb,
+        memory_nested: { buffer_pool_pct: memory.buffer_pool_pct, target_gb: memory.target_gb, current_gb: memory.current_gb, page_life_expectancy: memory.ple, chart: memory.chart, pressure_hist: memory.pressure_hist },
+      }
+    } finally {
+      await pool.close()
+    }
+  }
+
+  /** COLD: version, backups — 30min TTL */
+  async queryColdMetrics(creds: DbCredentials): Promise<Record<string, unknown>> {
+    const pool = await this.#openPool(creds)
+    try {
+      const [version, backups] = await Promise.all([
+        this.#queryVersion(pool),
+        this.#queryBackups(pool).catch(() => []),
+      ])
+      return {
+        db_version:      version.product_version,
+        uptime_days:     version.uptime_days,
+        os:              version.os,
+        cpus:            version.cpus,
+        os_cpu_count:    version.cpus,
+        backup_history:  backups,
+        log_flush_per_sec: 0,
+        log_cache_hit_pct: 0,
+      }
+    } finally {
+      await pool.close()
+    }
+  }
 }
