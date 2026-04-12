@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Loader2,
   Database,
+  HardDrive,
   ChevronDown,
   ChevronUp,
   Filter,
@@ -479,10 +480,19 @@ function CapacityTab({ days, thresholds }: { days: number; thresholds: Threshold
           </div>
 
           {expandedId === conn.connection_id && conn.trend.length > 0 && (
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <CapacityChart data={conn.trend} dataKey="storage_pct" label="Storage %" color="#f59e0b" />
-              <CapacityChart data={conn.trend} dataKey="connections_pct" label="Connections %" color="#3b82f6" />
-              <CapacityChart data={conn.trend} dataKey="memory_pct" label="Memory %" color="#8b5cf6" />
+            <div className="mt-4 space-y-4">
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <CapacityChart data={conn.trend} dataKey="storage_pct" label="Storage %" color="#f59e0b" />
+                <CapacityChart data={conn.trend} dataKey="connections_pct" label="Connections %" color="#3b82f6" />
+                <CapacityChart data={conn.trend} dataKey="memory_pct" label="Memory %" color="#8b5cf6" />
+              </div>
+
+              {/* Disk / Mount / Filegroup breakdown */}
+              <DiskBreakdown
+                dbType={conn.db_type}
+                diskMounts={conn.current.disk_mounts ?? []}
+                filegroupBreakdown={conn.current.filegroup_breakdown ?? []}
+              />
             </div>
           )}
           {expandedId === conn.connection_id && conn.trend.length === 0 && (
@@ -536,6 +546,101 @@ function CapacityChart({ data, dataKey, label, color }: { data: any[]; dataKey: 
           <Area type="monotone" dataKey="v" stroke={color} fill={`url(#grad-${dataKey})`} strokeWidth={2} dot={false} />
         </AreaChart>
       </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ─── Disk / Mount / Filegroup Breakdown ──────────────────────────────────────
+
+function DiskBreakdown({ dbType, diskMounts, filegroupBreakdown }: {
+  dbType: string
+  diskMounts: any[]
+  filegroupBreakdown: any[]
+}) {
+  if (diskMounts.length === 0 && filegroupBreakdown.length === 0) return null
+
+  const progressBar = (pct: number) => (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+        <div className="h-full rounded-full" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: pct > 90 ? '#ef4444' : pct > 75 ? '#f59e0b' : '#22c55e' }} />
+      </div>
+      <span className="text-xs tabular-nums w-12 text-right">{pct.toFixed(1)}%</span>
+    </div>
+  )
+
+  const mountLabel = dbType === 'oracle' ? 'Tablespace Breakdown' : dbType === 'mariadb' ? 'Schema Storage' : 'Disk Volumes'
+
+  return (
+    <div className="space-y-4">
+      {diskMounts.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+            <HardDrive className="h-3 w-3" />{mountLabel}
+          </h4>
+          <div className="rounded-lg border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left px-3 py-1.5 font-medium">{dbType === 'oracle' ? 'Tablespace' : dbType === 'mariadb' ? 'Schema' : 'Mount'}</th>
+                  {dbType === 'mssql' && <th className="text-left px-3 py-1.5 font-medium">Label</th>}
+                  <th className="text-right px-3 py-1.5 font-medium">Used GB</th>
+                  <th className="text-right px-3 py-1.5 font-medium">Total GB</th>
+                  {dbType !== 'mariadb' && <th className="text-right px-3 py-1.5 font-medium">Free GB</th>}
+                  <th className="px-3 py-1.5 font-medium w-40">Usage</th>
+                </tr>
+              </thead>
+              <tbody>
+                {diskMounts.map((d: any, i: number) => (
+                  <tr key={i} className="border-t border-border/50">
+                    <td className="px-3 py-1.5 font-mono">{d.mount}</td>
+                    {dbType === 'mssql' && <td className="px-3 py-1.5">{d.label ?? '—'}</td>}
+                    <td className="px-3 py-1.5 text-right tabular-nums">{Number(d.used_gb).toFixed(2)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{Number(d.total_gb).toFixed(2)}</td>
+                    {dbType !== 'mariadb' && <td className="px-3 py-1.5 text-right tabular-nums">{Number(d.free_gb).toFixed(2)}</td>}
+                    <td className="px-3 py-1.5">{progressBar(Number(d.used_pct))}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {filegroupBreakdown.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1">
+            <Database className="h-3 w-3" />Filegroup Breakdown
+          </h4>
+          <div className="rounded-lg border overflow-hidden">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left px-3 py-1.5 font-medium">Database</th>
+                  <th className="text-left px-3 py-1.5 font-medium">Filegroup</th>
+                  <th className="text-left px-3 py-1.5 font-medium">Type</th>
+                  <th className="text-left px-3 py-1.5 font-medium">Logical Name</th>
+                  <th className="text-right px-3 py-1.5 font-medium">Allocated GB</th>
+                  <th className="text-right px-3 py-1.5 font-medium">Used GB</th>
+                  <th className="text-left px-3 py-1.5 font-medium">Auto Growth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filegroupBreakdown.map((fg: any, i: number) => (
+                  <tr key={i} className="border-t border-border/50">
+                    <td className="px-3 py-1.5 font-mono">{fg.db_name}</td>
+                    <td className="px-3 py-1.5">{fg.filegroup_name}</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">{fg.fg_type}</td>
+                    <td className="px-3 py-1.5 font-mono text-muted-foreground">{fg.logical_name}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{Number(fg.allocated_gb).toFixed(3)}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{Number(fg.used_gb).toFixed(3)}</td>
+                    <td className="px-3 py-1.5">{fg.auto_growth}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

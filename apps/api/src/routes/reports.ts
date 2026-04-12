@@ -66,6 +66,8 @@ router.get('/capacity', requireAuth, async (req, res) => {
           throughput: extractThroughput(lm, c.db_type),
           cpu_pct: extractCpuPct(lm, c.db_type),
           os_memory: extractOsMemory(lm),
+          disk_mounts: extractDiskMounts(lm),
+          filegroup_breakdown: extractFilegroupBreakdown(lm),
         },
       }
     })
@@ -398,6 +400,18 @@ function extractOsMemory(m: Record<string, unknown>): { total_gb: number | null;
     total_gb:     num(m.os_physical_memory_gb),
     available_gb: num(m.os_available_memory_gb) ?? num(m.os_free_memory_gb),
   }
+}
+
+function extractDiskMounts(m: Record<string, unknown>): any[] {
+  const mounts = m.disk_mounts
+  if (Array.isArray(mounts)) return mounts
+  return []
+}
+
+function extractFilegroupBreakdown(m: Record<string, unknown>): any[] {
+  const fg = m.filegroup_breakdown
+  if (Array.isArray(fg)) return fg
+  return []
 }
 
 function num(v: unknown): number | null {
