@@ -19,6 +19,7 @@ import {
   Users,
   UserCircle2,
   Settings,
+  HeartPulse,
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -114,13 +115,25 @@ export function Sidebar() {
               href="/admin/users"
               className={cn(
                 'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                pathname.startsWith('/admin')
+                pathname.startsWith('/admin/users')
                   ? 'bg-brand-500/10 text-brand-400'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
               <Users className="w-4 h-4 shrink-0" />
               User Management
+            </Link>
+            <Link
+              href="/admin/services"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                pathname.startsWith('/admin/services')
+                  ? 'bg-brand-500/10 text-brand-400'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              <HeartPulse className="w-4 h-4 shrink-0" />
+              Services Health
             </Link>
           </>
         )}

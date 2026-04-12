@@ -191,4 +191,8 @@ export const api = {
         method: 'POST',
       }),
   },
+  services: {
+    overview: () =>
+      apiFetch<{ data: any }>('/api/admin/services/overview'),
+  },
 }
